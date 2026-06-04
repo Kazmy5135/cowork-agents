@@ -5,6 +5,7 @@ import {
   type ConnectionStatus,
   type HostData,
   type ServerToClientMessage,
+  type TaskScreenshot,
   type UserProfile
 } from "../../src/shared/types";
 
@@ -105,8 +106,8 @@ export class LanClient {
     }
   }
 
-  createTask(title: string, assigneeId: string): void {
-    this.send({ type: "task:create", title, assigneeId });
+  createTask(title: string): void {
+    this.send({ type: "task:create", title });
   }
 
   toggleTask(taskId: string, completed: boolean): void {
@@ -115,6 +116,10 @@ export class LanClient {
 
   assignTask(taskId: string, assigneeId: string): void {
     this.send({ type: "task:assign", taskId, assigneeId });
+  }
+
+  updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): void {
+    this.send({ type: "task:updateDetails", taskId, title, description, screenshots });
   }
 
   private handleMessage(raw: string): void {

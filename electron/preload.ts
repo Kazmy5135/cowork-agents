@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ConnectionStatus, HostData, HostInfo, UserProfile } from "../src/shared/types";
+import type { ConnectionStatus, HostData, HostInfo, TaskScreenshot, UserProfile } from "../src/shared/types";
 
 contextBridge.exposeInMainWorld("coWorkApi", {
+  getState: () => ipcRenderer.invoke("state:get") as Promise<HostData>,
   getLocalProfile: () => ipcRenderer.invoke("profile:get") as Promise<UserProfile | null>,
   saveLocalProfile: (profile: Partial<UserProfile>) =>
     ipcRenderer.invoke("profile:save", profile) as Promise<UserProfile>,
@@ -11,12 +12,14 @@ contextBridge.exposeInMainWorld("coWorkApi", {
   joinHost: (address: string, profile: UserProfile) =>
     ipcRenderer.invoke("client:join", address, profile) as Promise<string>,
   disconnect: () => ipcRenderer.invoke("client:disconnect") as Promise<void>,
-  createTask: (title: string, assigneeId: string) =>
-    ipcRenderer.invoke("task:create", title, assigneeId) as Promise<void>,
+  createTask: (title: string) => ipcRenderer.invoke("task:create", title) as Promise<void>,
   toggleTask: (taskId: string, completed: boolean) =>
     ipcRenderer.invoke("task:toggle", taskId, completed) as Promise<void>,
   assignTask: (taskId: string, assigneeId: string) =>
     ipcRenderer.invoke("task:assign", taskId, assigneeId) as Promise<void>,
+  updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) =>
+    ipcRenderer.invoke("task:update-details", taskId, title, description, screenshots) as Promise<void>,
+  openTaskDetail: (taskId: string) => ipcRenderer.invoke("task:open-detail", taskId) as Promise<void>,
   minimizeWindow: () => ipcRenderer.invoke("window:minimize") as Promise<void>,
   closeWindow: () => ipcRenderer.invoke("window:close") as Promise<void>,
   setAlwaysOnTop: (enabled: boolean) =>

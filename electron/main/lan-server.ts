@@ -4,11 +4,13 @@ import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   DEFAULT_PORT,
+  MAX_TASK_SCREENSHOTS,
   type ClientToServerMessage,
   type HostData,
   type HostInfo,
   type ServerToClientMessage,
   type Task,
+  type TaskScreenshot,
   type UserProfile
 } from "../../src/shared/types";
 import { HostDataStore } from "./data-store";
@@ -40,8 +42,46 @@ function normalizeProfile(profile: UserProfile): UserProfile {
 function cloneState(data: HostData): HostData {
   return {
     users: data.users.map((user) => ({ ...user })),
-    tasks: data.tasks.map((task) => ({ ...task }))
+    tasks: data.tasks.map((task) => ({
+      ...task,
+      screenshots: task.screenshots?.map((screenshot) => ({ ...screenshot }))
+    }))
   };
+}
+
+function normalizeTask(task: Task): Task {
+  return {
+    ...task,
+    description: task.description ?? "",
+    screenshots: task.screenshots ?? []
+  };
+}
+
+function validateScreenshots(screenshots: TaskScreenshot[]): TaskScreenshot[] {
+  if (screenshots.length > MAX_TASK_SCREENSHOTS) {
+    throw new Error(`每个任务最多只能附加 ${MAX_TASK_SCREENSHOTS} 张截图。`);
+  }
+
+  return screenshots.map((screenshot) => {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(screenshot.mimeType)) {
+      throw new Error("截图只支持 PNG、JPG 或 WebP。");
+    }
+
+    if (!screenshot.dataUrl.startsWith(`data:${screenshot.mimeType};base64,`)) {
+      throw new Error("截图数据格式不正确。");
+    }
+
+    if (!Number.isFinite(screenshot.width) || !Number.isFinite(screenshot.height) || screenshot.width <= 0 || screenshot.height <= 0) {
+      throw new Error("截图尺寸不正确。");
+    }
+
+    return {
+      ...screenshot,
+      name: screenshot.name.trim() || "screenshot",
+      width: Math.round(screenshot.width),
+      height: Math.round(screenshot.height)
+    };
+  });
 }
 
 export class LanServer {
@@ -60,6 +100,10 @@ export class LanServer {
     }
 
     this.data = await this.store.load();
+    this.data = {
+      users: this.data.users,
+      tasks: this.data.tasks.map(normalizeTask)
+    };
     await this.upsertUser(hostProfile);
 
     this.httpServer = createServer((request, response) => {
@@ -161,7 +205,7 @@ export class LanServer {
       }
 
       if (message.type === "task:create") {
-        await this.createTask(message.title, message.assigneeId);
+        await this.createTask(message.title);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
@@ -174,6 +218,12 @@ export class LanServer {
 
       if (message.type === "task:assign") {
         await this.assignTask(message.taskId, message.assigneeId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "task:updateDetails") {
+        await this.updateTaskDetails(message.taskId, message.title, message.description, message.screenshots);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
       }
     } catch (error) {
@@ -200,21 +250,18 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
-  private async createTask(title: string, assigneeId: string): Promise<void> {
+  private async createTask(title: string): Promise<void> {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
       throw new Error("任务标题不能为空。");
-    }
-
-    if (!this.data.users.some((user) => user.id === assigneeId)) {
-      throw new Error("负责人不存在或尚未连接。");
     }
 
     const now = new Date().toISOString();
     const task: Task = {
       id: randomUUID(),
       title: cleanTitle,
-      assigneeId,
+      description: "",
+      screenshots: [],
       completed: false,
       createdAt: now,
       updatedAt: now
@@ -246,6 +293,24 @@ export class LanServer {
     }
 
     task.assigneeId = assigneeId;
+    task.updatedAt = new Date().toISOString();
+    await this.store.save(this.data);
+  }
+
+  private async updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): Promise<void> {
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      throw new Error("任务不存在或已不在列表中。");
+    }
+
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      throw new Error("任务标题不能为空。");
+    }
+
+    task.title = cleanTitle;
+    task.description = description;
+    task.screenshots = validateScreenshots(screenshots);
     task.updatedAt = new Date().toISOString();
     await this.store.save(this.data);
   }

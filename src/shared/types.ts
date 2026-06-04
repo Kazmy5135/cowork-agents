@@ -1,4 +1,16 @@
 export const DEFAULT_PORT = 48731;
+export const MAX_TASK_SCREENSHOTS = 5;
+export const MAX_SCREENSHOT_EDGE = 1280;
+
+export interface TaskScreenshot {
+  id: string;
+  name: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  dataUrl: string;
+  width: number;
+  height: number;
+  createdAt: string;
+}
 
 export interface UserProfile {
   id: string;
@@ -10,7 +22,9 @@ export interface UserProfile {
 export interface Task {
   id: string;
   title: string;
-  assigneeId: string;
+  description?: string;
+  screenshots?: TaskScreenshot[];
+  assigneeId?: string;
   completed: boolean;
   createdAt: string;
   updatedAt: string;
@@ -41,7 +55,6 @@ export type ClientToServerMessage =
   | {
       type: "task:create";
       title: string;
-      assigneeId: string;
     }
   | {
       type: "task:toggle";
@@ -52,6 +65,13 @@ export type ClientToServerMessage =
       type: "task:assign";
       taskId: string;
       assigneeId: string;
+    }
+  | {
+      type: "task:updateDetails";
+      taskId: string;
+      title: string;
+      description: string;
+      screenshots: TaskScreenshot[];
     };
 
 export type ServerToClientMessage =
