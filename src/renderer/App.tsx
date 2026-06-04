@@ -388,6 +388,7 @@ function TaskApp({
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
+  const [showMineOnly, setShowMineOnly] = useState(false);
   const [activeAssignmentTaskId, setActiveAssignmentTaskId] = useState<string | null>(null);
 
   const users = useMemo(() => {
@@ -408,6 +409,11 @@ function TaskApp({
         return Date.parse(left.createdAt) - Date.parse(right.createdAt);
       }),
     [state.tasks]
+  );
+
+  const visibleTasks = useMemo(
+    () => (showMineOnly ? sortedTasks.filter((task) => task.assigneeId === profile.id) : sortedTasks),
+    [profile.id, showMineOnly, sortedTasks]
   );
 
   const activeAssignmentTask = useMemo(
@@ -457,9 +463,14 @@ function TaskApp({
           <Avatar user={profile} size="md" />
           <span>{profile.name}</span>
         </div>
-        <button className="scope-button" title="显示全部任务">
-          All
-          <span>Tasks</span>
+        <button
+          className="scope-button"
+          title={showMineOnly ? "显示全部任务" : "只显示我的任务"}
+          aria-pressed={showMineOnly}
+          onClick={() => setShowMineOnly((current) => !current)}
+        >
+          {showMineOnly ? "All" : "My"}
+          <span>Task</span>
         </button>
       </aside>
 
@@ -473,10 +484,10 @@ function TaskApp({
         </div>
 
         <div className="task-list">
-          {sortedTasks.length === 0 ? (
-            <div className="empty-state">还没有任务</div>
+          {visibleTasks.length === 0 ? (
+            <div className="empty-state">{showMineOnly ? "还没有分配给你的任务" : "还没有任务"}</div>
           ) : (
-            sortedTasks.map((task) => (
+            visibleTasks.map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}
