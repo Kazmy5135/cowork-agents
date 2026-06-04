@@ -127,6 +127,19 @@ function WindowControls({ pinned, onTogglePin }: { pinned: boolean; onTogglePin:
   );
 }
 
+function DetailWindowControls() {
+  return (
+    <div className="window-controls detail-window-controls">
+      <button className="icon-button" title="最小化" onClick={() => void window.coWorkApi.minimizeWindow()}>
+        <Minus size={15} />
+      </button>
+      <button className="icon-button danger" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
 function SetupView({
   initialProfile,
   onSaved
@@ -630,9 +643,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
             <p>任务详情</p>
             <h1>未找到任务</h1>
           </div>
-          <button className="icon-button" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
-            <X size={16} />
-          </button>
+          <DetailWindowControls />
         </header>
         <section className="detail-empty">这个任务可能已经被删除，或当前窗口还没有收到主机状态。</section>
       </main>
@@ -646,9 +657,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
           <p>任务详情</p>
           <h1>{task.title}</h1>
         </div>
-        <button className="icon-button" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
-          <X size={16} />
-        </button>
+        <DetailWindowControls />
       </header>
 
       <section className="detail-content">

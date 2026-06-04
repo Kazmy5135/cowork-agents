@@ -66,6 +66,10 @@ function loadRenderer(targetWindow: BrowserWindow, query?: Record<string, string
   void targetWindow.loadFile(join(app.getAppPath(), "dist-renderer", "index.html"), { query });
 }
 
+function glassWindowMaterial() {
+  return process.platform === "win32" ? { backgroundMaterial: "acrylic" as const } : {};
+}
+
 function openTaskDetailWindow(taskId: string): void {
   const existingWindow = detailWindows.get(taskId);
   if (existingWindow && !existingWindow.isDestroyed()) {
@@ -78,8 +82,12 @@ function openTaskDetailWindow(taskId: string): void {
     height: 680,
     minWidth: 620,
     minHeight: 600,
+    frame: false,
+    transparent: true,
     title: "任务详情",
-    backgroundColor: "#171b24",
+    backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    ...glassWindowMaterial(),
     webPreferences: {
       preload: join(__dirname, "../preload.js"),
       contextIsolation: true,
@@ -106,6 +114,8 @@ function createWindow(): void {
     transparent: true,
     alwaysOnTop: true,
     backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    ...glassWindowMaterial(),
     title: "协作任务",
     webPreferences: {
       preload: join(__dirname, "../preload.js"),
@@ -184,7 +194,7 @@ function registerIpc(): void {
     openTaskDetailWindow(taskId);
   });
 
-  ipcMain.handle("window:minimize", () => mainWindow?.minimize());
+  ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
   ipcMain.handle("window:set-always-on-top", (_event, enabled: boolean) => {
     mainWindow?.setAlwaysOnTop(enabled, "floating");
