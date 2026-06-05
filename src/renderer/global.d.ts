@@ -1,15 +1,16 @@
-import type { ConnectionStatus, HostData, HostInfo, TaskScreenshot, UserProfile } from "../shared/types";
+import type { AccountAuthResult, ConnectionStatus, HostData, HostInfo, ProfileUpdateRequest, TaskScreenshot, UserProfile } from "../shared/types";
 
 declare global {
   interface Window {
     coWorkApi: {
       getState: () => Promise<HostData>;
-      getLocalProfile: () => Promise<UserProfile | null>;
-      saveLocalProfile: (profile: Partial<UserProfile>) => Promise<UserProfile>;
       getLanAddresses: () => Promise<string[]>;
-      startHost: (profile: UserProfile) => Promise<HostInfo>;
+      startHost: () => Promise<HostInfo>;
       stopHost: () => Promise<void>;
-      joinHost: (address: string, profile: UserProfile) => Promise<string>;
+      joinHost: (address: string) => Promise<string>;
+      loginAccount: (accountId: string) => Promise<AccountAuthResult>;
+      registerAccount: (accountId: string) => Promise<AccountAuthResult>;
+      updateAccountProfile: (profile: ProfileUpdateRequest) => Promise<UserProfile>;
       disconnect: () => Promise<void>;
       createTask: (title: string) => Promise<void>;
       toggleTask: (taskId: string, completed: boolean) => Promise<void>;
@@ -23,6 +24,7 @@ declare global {
       moveCompactWindowBy: (deltaX: number, deltaY: number) => Promise<void>;
       closeWindow: () => Promise<void>;
       setAlwaysOnTop: (enabled: boolean) => Promise<boolean>;
+      copyText: (text: string) => Promise<void>;
       onState: (callback: (state: HostData) => void) => () => void;
       onConnectionStatus: (callback: (status: ConnectionStatus) => void) => () => void;
       onHostInfo: (callback: (info: HostInfo | null) => void) => () => void;

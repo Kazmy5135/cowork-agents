@@ -1,16 +1,16 @@
-import { contextBridge, ipcRenderer } from "electron";
-import type { ConnectionStatus, HostData, HostInfo, TaskScreenshot, UserProfile } from "../src/shared/types";
+import { clipboard, contextBridge, ipcRenderer } from "electron";
+import type { AccountAuthResult, ConnectionStatus, HostData, HostInfo, ProfileUpdateRequest, TaskScreenshot, UserProfile } from "../src/shared/types";
 
 contextBridge.exposeInMainWorld("coWorkApi", {
   getState: () => ipcRenderer.invoke("state:get") as Promise<HostData>,
-  getLocalProfile: () => ipcRenderer.invoke("profile:get") as Promise<UserProfile | null>,
-  saveLocalProfile: (profile: Partial<UserProfile>) =>
-    ipcRenderer.invoke("profile:save", profile) as Promise<UserProfile>,
   getLanAddresses: () => ipcRenderer.invoke("network:addresses") as Promise<string[]>,
-  startHost: (profile: UserProfile) => ipcRenderer.invoke("host:start", profile) as Promise<HostInfo>,
+  startHost: () => ipcRenderer.invoke("host:start") as Promise<HostInfo>,
   stopHost: () => ipcRenderer.invoke("host:stop") as Promise<void>,
-  joinHost: (address: string, profile: UserProfile) =>
-    ipcRenderer.invoke("client:join", address, profile) as Promise<string>,
+  joinHost: (address: string) => ipcRenderer.invoke("client:join", address) as Promise<string>,
+  loginAccount: (accountId: string) => ipcRenderer.invoke("account:login", accountId) as Promise<AccountAuthResult>,
+  registerAccount: (accountId: string) => ipcRenderer.invoke("account:register", accountId) as Promise<AccountAuthResult>,
+  updateAccountProfile: (profile: ProfileUpdateRequest) =>
+    ipcRenderer.invoke("account:update-profile", profile) as Promise<UserProfile>,
   disconnect: () => ipcRenderer.invoke("client:disconnect") as Promise<void>,
   createTask: (title: string) => ipcRenderer.invoke("task:create", title) as Promise<void>,
   toggleTask: (taskId: string, completed: boolean) =>
@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld("coWorkApi", {
   closeWindow: () => ipcRenderer.invoke("window:close") as Promise<void>,
   setAlwaysOnTop: (enabled: boolean) =>
     ipcRenderer.invoke("window:set-always-on-top", enabled) as Promise<boolean>,
+  copyText: (text: string) => {
+    clipboard.writeText(text);
+    return Promise.resolve();
+  },
   onState: (callback: (state: HostData) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: HostData) => callback(state);
     ipcRenderer.on("state:update", handler);

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  ACCOUNT_ID_LENGTH,
   DEFAULT_PORT,
   MAX_TASK_SCREENSHOTS,
   TRASH_RETENTION_DAYS,
@@ -16,6 +17,7 @@ import {
 } from "../../src/shared/types";
 import { HostDataStore } from "./data-store";
 
+const ACCOUNT_ID_REGEX = new RegExp(`^\\d{${ACCOUNT_ID_LENGTH}}$`);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
 const TRASH_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -35,13 +37,38 @@ function getLanAddresses(port: number): string[] {
   return addresses;
 }
 
-function normalizeProfile(profile: UserProfile): UserProfile {
+function isProfileComplete(profile: UserProfile): boolean {
+  return profile.profileComplete ?? profile.name.trim().length > 0;
+}
+
+function normalizeStoredUser(profile: UserProfile): UserProfile {
+  const name = profile.name?.trim() ?? "";
+
   return {
-    id: profile.id,
-    name: profile.name.trim() || "Player",
+    id: String(profile.id),
+    name,
     avatarDataUrl: profile.avatarDataUrl,
-    lastSeenAt: new Date().toISOString()
+    lastSeenAt: profile.lastSeenAt || new Date().toISOString(),
+    profileComplete: profile.profileComplete ?? name.length > 0
   };
+}
+
+function createRegisteredProfile(accountId: string): UserProfile {
+  return {
+    id: accountId,
+    name: "",
+    lastSeenAt: new Date().toISOString(),
+    profileComplete: false
+  };
+}
+
+function validateAccountId(accountId: string): string {
+  const cleanAccountId = accountId.trim();
+  if (!ACCOUNT_ID_REGEX.test(cleanAccountId)) {
+    throw new Error(`账号必须是 ${ACCOUNT_ID_LENGTH} 位数字。`);
+  }
+
+  return cleanAccountId;
 }
 
 function cloneState(data: HostData): HostData {
@@ -103,24 +130,24 @@ export class LanServer {
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
   private cleanupTimer: NodeJS.Timeout | null = null;
+  private readonly sessions = new Map<WebSocket, string>();
   private readonly store: HostDataStore;
 
   constructor(store: HostDataStore) {
     this.store = store;
   }
 
-  async start(hostProfile: UserProfile, port = DEFAULT_PORT): Promise<HostInfo> {
+  async start(port = DEFAULT_PORT): Promise<HostInfo> {
     if (this.httpServer) {
       return this.getHostInfo(port);
     }
 
     this.data = await this.store.load();
     this.data = {
-      users: this.data.users,
+      users: this.data.users.map(normalizeStoredUser),
       tasks: this.data.tasks.map(normalizeTask)
     };
     await this.deleteExpiredTrashedTasks();
-    await this.upsertUser(hostProfile);
 
     this.httpServer = createServer((request, response) => {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -171,6 +198,7 @@ export class LanServer {
     const httpServer = this.httpServer;
     this.wsServer = null;
     this.httpServer = null;
+    this.sessions.clear();
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
@@ -222,6 +250,9 @@ export class LanServer {
     socket.on("message", (raw) => {
       void this.handleMessage(socket, raw.toString());
     });
+    socket.on("close", () => {
+      this.sessions.delete(socket);
+    });
   }
 
   private async handleMessage(socket: WebSocket, raw: string): Promise<void> {
@@ -237,12 +268,22 @@ export class LanServer {
     try {
       await this.deleteExpiredTrashedTasks();
 
-      if (message.type === "client:join") {
-        await this.upsertUser(message.profile);
-        this.send(socket, { type: "state:full", state: cloneState(this.data) });
-        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+      if (message.type === "account:login") {
+        await this.loginAccount(socket, message.accountId);
         return;
       }
+
+      if (message.type === "account:register") {
+        await this.registerAccount(socket, message.accountId);
+        return;
+      }
+
+      if (message.type === "account:updateProfile") {
+        await this.updateCurrentProfile(socket, message.profile);
+        return;
+      }
+
+      this.requireReadySession(socket);
 
       if (message.type === "task:create") {
         await this.createTask(message.title);
@@ -286,20 +327,86 @@ export class LanServer {
     }
   }
 
-  private async upsertUser(profile: UserProfile): Promise<void> {
-    const nextProfile = normalizeProfile(profile);
-    const existingIndex = this.data.users.findIndex((user) => user.id === nextProfile.id);
+  private async loginAccount(socket: WebSocket, accountId: string): Promise<void> {
+    const cleanAccountId = validateAccountId(accountId);
+    const user = this.data.users.find((item) => item.id === cleanAccountId);
 
-    if (existingIndex >= 0) {
-      this.data.users[existingIndex] = {
-        ...this.data.users[existingIndex],
-        ...nextProfile
-      };
-    } else {
-      this.data.users.push(nextProfile);
+    if (!user) {
+      throw new Error("账号不存在，请先注册。");
     }
 
+    user.lastSeenAt = new Date().toISOString();
     await this.store.save(this.data);
+    this.sessions.set(socket, cleanAccountId);
+
+    const state = cloneState(this.data);
+    this.send(socket, {
+      type: isProfileComplete(user) ? "account:loginSuccess" : "account:profileRequired",
+      profile: { ...user },
+      state
+    });
+    this.broadcast({ type: "state:update", state });
+  }
+
+  private async registerAccount(socket: WebSocket, accountId: string): Promise<void> {
+    const cleanAccountId = validateAccountId(accountId);
+    const existingUser = this.data.users.find((item) => item.id === cleanAccountId);
+
+    if (existingUser) {
+      throw new Error("账号已存在，请直接登录。");
+    }
+
+    const profile = createRegisteredProfile(cleanAccountId);
+    this.data.users.push(profile);
+    await this.store.save(this.data);
+    this.sessions.set(socket, cleanAccountId);
+
+    const state = cloneState(this.data);
+    this.send(socket, { type: "account:registered", profile: { ...profile }, state });
+    this.broadcast({ type: "state:update", state });
+  }
+
+  private requireSession(socket: WebSocket): UserProfile {
+    const accountId = this.sessions.get(socket);
+    if (!accountId) {
+      throw new Error("请先登录账号。");
+    }
+
+    const user = this.data.users.find((item) => item.id === accountId);
+    if (!user) {
+      this.sessions.delete(socket);
+      throw new Error("账号信息不存在，请重新登录。");
+    }
+
+    return user;
+  }
+
+  private requireReadySession(socket: WebSocket): UserProfile {
+    const user = this.requireSession(socket);
+    if (!isProfileComplete(user)) {
+      throw new Error("请先设置用户名和头像。");
+    }
+
+    return user;
+  }
+
+  private async updateCurrentProfile(socket: WebSocket, profile: { name: string; avatarDataUrl?: string }): Promise<void> {
+    const user = this.requireSession(socket);
+    const cleanName = profile.name.trim();
+
+    if (!cleanName) {
+      throw new Error("请输入用户名。");
+    }
+
+    user.name = cleanName;
+    user.avatarDataUrl = profile.avatarDataUrl || undefined;
+    user.profileComplete = true;
+    user.lastSeenAt = new Date().toISOString();
+    await this.store.save(this.data);
+
+    const state = cloneState(this.data);
+    this.send(socket, { type: "account:profileUpdated", profile: { ...user }, state });
+    this.broadcast({ type: "state:update", state });
   }
 
   private findActiveTask(taskId: string): Task {
@@ -364,7 +471,7 @@ export class LanServer {
   private async assignTask(taskId: string, assigneeId: string): Promise<void> {
     const task = this.findActiveTask(taskId);
 
-    if (!this.data.users.some((user) => user.id === assigneeId)) {
+    if (!this.data.users.some((user) => user.id === assigneeId && isProfileComplete(user))) {
       throw new Error("负责人不存在或尚未连接。");
     }
 

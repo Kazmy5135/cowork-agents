@@ -6,8 +6,8 @@ import {
   Circle,
   Clipboard,
   Image as ImageIcon,
+  LogIn,
   Loader2,
-  Minus,
   Pin,
   PinOff,
   Plus,
@@ -17,14 +17,17 @@ import {
   Settings,
   Trash2,
   Upload,
+  UserPlus,
   UserRound,
   Wifi,
   X
 } from "lucide-react";
 import {
+  ACCOUNT_ID_LENGTH,
   MAX_SCREENSHOT_EDGE,
   MAX_TASK_SCREENSHOTS,
   TRASH_RETENTION_DAYS,
+  type AccountAuthResult,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
@@ -37,6 +40,7 @@ const EMPTY_STATE: HostData = {
   users: [],
   tasks: []
 };
+const ACCOUNT_ID_REGEX = new RegExp(`^\\d{${ACCOUNT_ID_LENGTH}}$`);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
 const trashDateFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -55,6 +59,22 @@ interface CompactTaskSnapshot {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeAccountInput(value: string): string {
+  return value.replace(/\D/g, "").slice(0, ACCOUNT_ID_LENGTH);
+}
+
+function getAccountError(accountId: string): string {
+  return ACCOUNT_ID_REGEX.test(accountId) ? "" : `请输入 ${ACCOUNT_ID_LENGTH} 位数字账号。`;
+}
+
+function getUserDisplayName(user?: UserProfile): string {
+  return user?.name.trim() || user?.id || "未分配";
+}
+
+function isUserProfileComplete(user: UserProfile): boolean {
+  return user.profileComplete ?? user.name.trim().length > 0;
 }
 
 function initials(name: string): string {
@@ -210,9 +230,11 @@ async function compressImageFile(file: File): Promise<TaskScreenshot> {
 }
 
 function Avatar({ user, size = "md" }: { user?: UserProfile; size?: "sm" | "md" | "lg" }) {
+  const displayName = getUserDisplayName(user);
+
   return (
-    <div className={`avatar avatar-${size}`} title={user?.name ?? "未分配"}>
-      {user?.avatarDataUrl ? <img src={user.avatarDataUrl} alt={user.name} /> : <span>{initials(user?.name ?? "?")}</span>}
+    <div className={`avatar avatar-${size}`} title={displayName}>
+      {user?.avatarDataUrl ? <img src={user.avatarDataUrl} alt={displayName} /> : <span>{initials(displayName)}</span>}
     </div>
   );
 }
@@ -228,7 +250,7 @@ function CompactIcon({
   changeCount: number;
   onRestore: () => void;
 }) {
-  const displayName = user?.name ?? "Player";
+  const displayName = getUserDisplayName(user);
   const dragState = useRef<{
     pointerId: number;
     startX: number;
@@ -337,10 +359,7 @@ function WindowControls({
           <Settings size={14} />
         </button>
       ) : null}
-      <button className="icon-button" title="最小化" onClick={onMinimize ?? (() => void window.coWorkApi.minimizeWindow())}>
-        <Minus size={15} />
-      </button>
-      <button className="icon-button danger" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
+      <button className="icon-button danger" title="收起到小托盘" onClick={onMinimize ?? (() => void window.coWorkApi.closeWindow())}>
         <X size={15} />
       </button>
     </div>
@@ -350,9 +369,6 @@ function WindowControls({
 function DetailWindowControls() {
   return (
     <div className="window-controls detail-window-controls">
-      <button className="icon-button" title="最小化" onClick={() => void window.coWorkApi.minimizeWindow()}>
-        <Minus size={15} />
-      </button>
       <button className="icon-button danger" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
         <X size={15} />
       </button>
@@ -360,24 +376,26 @@ function DetailWindowControls() {
   );
 }
 
-function SetupView({
-  initialProfile,
+function ProfileSetupView({
+  profile,
+  mode,
   onSaved,
   onMinimize
 }: {
-  initialProfile: UserProfile | null;
+  profile: UserProfile;
+  mode: "setup" | "edit";
   onSaved: (profile: UserProfile) => void;
   onMinimize: () => void;
 }) {
-  const [name, setName] = useState(initialProfile?.name ?? "");
-  const [avatarDataUrl, setAvatarDataUrl] = useState(initialProfile?.avatarDataUrl ?? "");
+  const [name, setName] = useState(profile.name ?? "");
+  const [avatarDataUrl, setAvatarDataUrl] = useState(profile.avatarDataUrl ?? "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
     const cleanName = name.trim();
     if (!cleanName) {
-      setError("请输入昵称。");
+      setError("请输入用户名。");
       return;
     }
 
@@ -385,15 +403,13 @@ function SetupView({
     setError("");
 
     try {
-      const saved = await window.coWorkApi.saveLocalProfile({
-        id: initialProfile?.id,
+      const saved = await window.coWorkApi.updateAccountProfile({
         name: cleanName,
-        avatarDataUrl: avatarDataUrl || undefined,
-        lastSeenAt: nowIso()
+        avatarDataUrl: avatarDataUrl || undefined
       });
       onSaved(saved);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "保存失败。");
+      setError(saveError instanceof Error ? saveError.message : "保存资料失败。");
     } finally {
       setSaving(false);
     }
@@ -410,10 +426,11 @@ function SetupView({
   }
 
   const previewUser: UserProfile = {
-    id: initialProfile?.id ?? "preview",
+    id: profile.id,
     name: name || "Player",
     avatarDataUrl: avatarDataUrl || undefined,
-    lastSeenAt: nowIso()
+    lastSeenAt: profile.lastSeenAt,
+    profileComplete: Boolean(name.trim())
   };
 
   return (
@@ -430,7 +447,11 @@ function SetupView({
         </label>
         <div className="setup-fields">
           <div>
-            <label htmlFor="display-name">昵称</label>
+            <label htmlFor="account-id">账号</label>
+            <input id="account-id" value={profile.id} readOnly />
+          </div>
+          <div>
+            <label htmlFor="display-name">用户名</label>
             <input
               id="display-name"
               autoFocus
@@ -445,10 +466,16 @@ function SetupView({
               }}
             />
           </div>
-          {error ? <p className="error-text">{error}</p> : <p className="muted-text">资料只保存在本机，并在加入局域网主机时同步。</p>}
+          {error ? (
+            <p className="error-text">{error}</p>
+          ) : (
+            <p className="muted-text">
+              {mode === "setup" ? "首次注册后需要设置用户名和头像，资料会保存在主机上。" : "修改会同步写回当前主机账号资料。"}
+            </p>
+          )}
           <button className="primary-button" disabled={saving} onClick={() => void handleSave()}>
             {saving ? <Loader2 className="spin" size={16} /> : <UserRound size={16} />}
-            保存身份
+            保存资料
           </button>
         </div>
       </section>
@@ -457,20 +484,16 @@ function SetupView({
 }
 
 function ConnectView({
-  profile,
   status,
   hostInfo,
   lanUrls,
   onConnected,
-  onEditProfile,
   onMinimize
 }: {
-  profile: UserProfile;
   status: ConnectionStatus;
   hostInfo: HostInfo | null;
   lanUrls: string[];
   onConnected: () => void;
-  onEditProfile: () => void;
   onMinimize: () => void;
 }) {
   const [joinAddress, setJoinAddress] = useState("");
@@ -481,7 +504,7 @@ function ConnectView({
     setBusy("host");
     setError("");
     try {
-      await window.coWorkApi.startHost(profile);
+      await window.coWorkApi.startHost();
       onConnected();
     } catch (hostError) {
       setError(hostError instanceof Error ? hostError.message : "主机启动失败。");
@@ -494,7 +517,7 @@ function ConnectView({
     setBusy("join");
     setError("");
     try {
-      await window.coWorkApi.joinHost(joinAddress, profile);
+      await window.coWorkApi.joinHost(joinAddress);
       onConnected();
     } catch (joinError) {
       setError(joinError instanceof Error ? joinError.message : "连接失败。");
@@ -506,12 +529,7 @@ function ConnectView({
   return (
     <main className="app-panel connect-panel">
       <div className="drag-bar">
-        <div className="profile-strip">
-          <button className="profile-avatar-button" title="更换用户" aria-label="更换用户" disabled={busy !== null} onClick={onEditProfile}>
-            <Avatar user={profile} size="sm" />
-          </button>
-          <span>{profile.name}</span>
-        </div>
+        <span>协作任务</span>
         <WindowControls pinned={true} onTogglePin={() => undefined} onMinimize={onMinimize} />
       </div>
       <section className="connect-grid">
@@ -542,6 +560,86 @@ function ConnectView({
         {error || status.phase === "error" ? <AlertCircle size={14} /> : <Wifi size={14} />}
         <span>{error || status.message || "未连接"}</span>
       </div>
+    </main>
+  );
+}
+
+function AccountView({
+  status,
+  onAuthenticated,
+  onMinimize
+}: {
+  status: ConnectionStatus;
+  onAuthenticated: (result: AccountAuthResult) => void;
+  onMinimize: () => void;
+}) {
+  const [accountId, setAccountId] = useState("");
+  const [busy, setBusy] = useState<"login" | "register" | null>(null);
+  const [error, setError] = useState("");
+
+  async function authenticate(action: "login" | "register") {
+    const accountError = getAccountError(accountId);
+    if (accountError) {
+      setError(accountError);
+      return;
+    }
+
+    setBusy(action);
+    setError("");
+
+    try {
+      const result =
+        action === "login" ? await window.coWorkApi.loginAccount(accountId) : await window.coWorkApi.registerAccount(accountId);
+      onAuthenticated(result);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : action === "login" ? "登录失败。" : "注册失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <main className="app-panel account-panel">
+      <div className="drag-bar">
+        <span>账号登录</span>
+        <WindowControls pinned={true} onTogglePin={() => undefined} onMinimize={onMinimize} />
+      </div>
+      <section className="account-layout">
+        <div className="account-field">
+          <label htmlFor="account-id-input">账号</label>
+          <input
+            id="account-id-input"
+            autoFocus
+            inputMode="numeric"
+            value={accountId}
+            maxLength={ACCOUNT_ID_LENGTH}
+            placeholder="12345678901"
+            onChange={(event) => {
+              setAccountId(normalizeAccountInput(event.target.value));
+              setError("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void authenticate("login");
+              }
+            }}
+          />
+        </div>
+        <div className="account-actions">
+          <button className="primary-button" disabled={busy !== null} onClick={() => void authenticate("login")}>
+            {busy === "login" ? <Loader2 className="spin" size={16} /> : <LogIn size={16} />}
+            登录
+          </button>
+          <button className="secondary-button" disabled={busy !== null} onClick={() => void authenticate("register")}>
+            {busy === "register" ? <Loader2 className="spin" size={16} /> : <UserPlus size={16} />}
+            注册
+          </button>
+        </div>
+        <div className="status-line account-status-line">
+          {error || status.phase === "error" ? <AlertCircle size={14} /> : <Wifi size={14} />}
+          <span>{error || status.message || "已连接主机"}</span>
+        </div>
+      </section>
     </main>
   );
 }
@@ -630,11 +728,11 @@ function AssignmentPopover({
             <button
               key={user.id}
               className={`assignment-user-option ${user.id === currentAssigneeId ? "selected" : ""}`}
-              title={user.name}
+              title={getUserDisplayName(user)}
               onClick={() => onAssign(user.id)}
             >
               <Avatar user={user} size="md" />
-              <span>{user.name}</span>
+              <span>{getUserDisplayName(user)}</span>
             </button>
           ))}
         </div>
@@ -725,6 +823,7 @@ function TaskApp({
   hostInfo,
   pinned,
   onTogglePin,
+  onEditProfile,
   onMinimize
 }: {
   profile: UserProfile;
@@ -733,6 +832,7 @@ function TaskApp({
   hostInfo: HostInfo | null;
   pinned: boolean;
   onTogglePin: () => void;
+  onEditProfile: () => void;
   onMinimize: () => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -742,12 +842,22 @@ function TaskApp({
   const [activeAssignmentTaskId, setActiveAssignmentTaskId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [addressCopied, setAddressCopied] = useState(false);
+  const copyFeedbackTimer = useRef<number | null>(null);
+  const hostShareAddress = hostInfo?.url ?? hostInfo?.addresses[0] ?? "";
+  const statusLabel = addressCopied ? "已复制" : hostInfo ? "Host" : status.phase === "connected" ? "Client" : "LAN";
 
   const users = useMemo(() => {
     const byId = new Map<string, UserProfile>();
-    byId.set(profile.id, profile);
-    state.users.forEach((user) => byId.set(user.id, user));
-    return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    if (isUserProfileComplete(profile)) {
+      byId.set(profile.id, profile);
+    }
+    state.users.forEach((user) => {
+      if (isUserProfileComplete(user)) {
+        byId.set(user.id, user);
+      }
+    });
+    return [...byId.values()].sort((left, right) => getUserDisplayName(left).localeCompare(getUserDisplayName(right), "zh-CN"));
   }, [profile, state.users]);
 
   const usersById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
@@ -793,6 +903,14 @@ function TaskApp({
   }, [activeTasks, taskMenu]);
 
   useEffect(() => {
+    return () => {
+      if (copyFeedbackTimer.current !== null) {
+        window.clearTimeout(copyFeedbackTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!taskMenu) {
       return;
     }
@@ -815,6 +933,30 @@ function TaskApp({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [taskMenu]);
+
+  async function copyHostAddress() {
+    if (!hostShareAddress) {
+      return;
+    }
+
+    setError("");
+    try {
+      await window.coWorkApi.copyText(hostShareAddress);
+      setAddressCopied(true);
+
+      if (copyFeedbackTimer.current !== null) {
+        window.clearTimeout(copyFeedbackTimer.current);
+      }
+
+      copyFeedbackTimer.current = window.setTimeout(() => {
+        setAddressCopied(false);
+        copyFeedbackTimer.current = null;
+      }, 1400);
+    } catch (copyError) {
+      setAddressCopied(false);
+      setError(copyError instanceof Error ? copyError.message : "复制主机地址失败。");
+    }
+  }
 
   async function createTask() {
     const cleanTitle = title.trim();
@@ -895,8 +1037,10 @@ function TaskApp({
     <main className="app-panel task-panel">
       <aside className="side-rail">
         <div className="current-user">
-          <Avatar user={profile} size="md" />
-          <span>{profile.name}</span>
+          <button className="current-user-avatar" type="button" title="修改账号资料" aria-label="修改账号资料" onClick={onEditProfile}>
+            <Avatar user={profile} size="md" />
+          </button>
+          <span>{getUserDisplayName(profile)}</span>
         </div>
         <button
           className="scope-button"
@@ -911,10 +1055,16 @@ function TaskApp({
 
       <section className="task-surface">
         <div className="drag-bar task-drag">
-          <div className="status-pill">
+          <button
+            className={`status-pill${addressCopied ? " status-pill-copied" : ""}`}
+            type="button"
+            title={hostShareAddress ? `复制主机地址：${hostShareAddress}` : "等待主机地址"}
+            aria-disabled={!hostShareAddress}
+            onClick={() => void copyHostAddress()}
+          >
             <Wifi size={13} />
-            <span>{hostInfo ? "Host" : status.phase === "connected" ? "Client" : "LAN"}</span>
-          </div>
+            <span>{statusLabel}</span>
+          </button>
           <WindowControls
             pinned={pinned}
             onTogglePin={onTogglePin}
@@ -1265,23 +1415,25 @@ export function App() {
   useEffect(() => {
     const cleanupState = window.coWorkApi.onState((nextState) => {
       setState(nextState);
-      setConnected(true);
     });
     const cleanupStatus = window.coWorkApi.onConnectionStatus((nextStatus) => {
       setStatus(nextStatus);
+      if (nextStatus.phase === "connected") {
+        setConnected(true);
+      }
       if (nextStatus.phase === "disconnected" || nextStatus.phase === "idle") {
         setConnected(false);
+        setProfile(null);
+        setEditingProfile(false);
+        setState(EMPTY_STATE);
       }
     });
     const cleanupHost = window.coWorkApi.onHostInfo(setHostInfo);
     const cleanupCompactMode = window.coWorkApi.onCompactMode(setCompactMode);
 
-    void window.coWorkApi.getLocalProfile().then((savedProfile) => {
-      setProfile(savedProfile);
-      setLoading(false);
-    });
-    void window.coWorkApi.getState().then(setState);
-    void window.coWorkApi.getLanAddresses().then(setLanUrls);
+    void Promise.all([window.coWorkApi.getState().then(setState), window.coWorkApi.getLanAddresses().then(setLanUrls)]).finally(() =>
+      setLoading(false)
+    );
 
     return () => {
       cleanupState();
@@ -1290,6 +1442,26 @@ export function App() {
       cleanupCompactMode();
     };
   }, []);
+
+  useEffect(() => {
+    if (!profile) {
+      return;
+    }
+
+    const nextProfile = state.users.find((user) => user.id === profile.id);
+    if (!nextProfile) {
+      return;
+    }
+
+    if (
+      nextProfile.name !== profile.name ||
+      nextProfile.avatarDataUrl !== profile.avatarDataUrl ||
+      nextProfile.lastSeenAt !== profile.lastSeenAt ||
+      nextProfile.profileComplete !== profile.profileComplete
+    ) {
+      setProfile(nextProfile);
+    }
+  }, [profile, state.users]);
 
   async function togglePinned() {
     const next = !pinned;
@@ -1307,6 +1479,11 @@ export function App() {
     setCompactMode(false);
     setCompactTaskSnapshot(null);
     await window.coWorkApi.restoreWindow();
+  }
+
+  function handleAuthResult(result: AccountAuthResult) {
+    setProfile(result.profile);
+    setEditingProfile(result.requiresProfileSetup);
   }
 
   const compactMetrics = useMemo(() => {
@@ -1346,28 +1523,37 @@ export function App() {
     );
   }
 
-  if (!profile || editingProfile) {
+  if (!connected) {
     return (
-      <SetupView
-        initialProfile={profile}
-        onSaved={(nextProfile) => {
-          setProfile(nextProfile);
-          setEditingProfile(false);
-        }}
+      <ConnectView
+        status={status}
+        hostInfo={hostInfo}
+        lanUrls={lanUrls}
+        onConnected={() => setConnected(true)}
         onMinimize={enterCompactMode}
       />
     );
   }
 
-  if (!connected) {
+  if (!profile) {
     return (
-      <ConnectView
-        profile={profile}
+      <AccountView
         status={status}
-        hostInfo={hostInfo}
-        lanUrls={lanUrls}
-        onConnected={() => setConnected(true)}
-        onEditProfile={() => setEditingProfile(true)}
+        onAuthenticated={handleAuthResult}
+        onMinimize={enterCompactMode}
+      />
+    );
+  }
+
+  if (editingProfile) {
+    return (
+      <ProfileSetupView
+        profile={profile}
+        mode={isUserProfileComplete(profile) ? "edit" : "setup"}
+        onSaved={(nextProfile) => {
+          setProfile(nextProfile);
+          setEditingProfile(false);
+        }}
         onMinimize={enterCompactMode}
       />
     );
@@ -1381,6 +1567,7 @@ export function App() {
       hostInfo={hostInfo}
       pinned={pinned}
       onTogglePin={() => void togglePinned()}
+      onEditProfile={() => setEditingProfile(true)}
       onMinimize={enterCompactMode}
     />
   );

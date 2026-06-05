@@ -1,15 +1,14 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   DEFAULT_PORT,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
-  type TaskScreenshot,
-  type UserProfile
+  type ProfileUpdateRequest,
+  type TaskScreenshot
 } from "../../src/shared/types";
-import { HostDataStore, ProfileStore } from "./data-store";
+import { HostDataStore } from "./data-store";
 import { LanClient } from "./lan-client";
 import { LanServer, listLanUrls } from "./lan-server";
 
@@ -19,7 +18,6 @@ let appIcon: NativeImage | null = null;
 let lastMainWindowBounds: { x: number; y: number; width: number; height: number } | null = null;
 let isMainWindowCompact = false;
 let isQuitting = false;
-let profileStore: ProfileStore;
 let hostStore: HostDataStore;
 let lanServer: LanServer | null = null;
 let lanClient: LanClient | null = null;
@@ -57,16 +55,6 @@ function getClient(): LanClient {
   }
 
   return lanClient;
-}
-
-function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
-  const now = new Date().toISOString();
-  return {
-    id: profile.id || randomUUID(),
-    name: profile.name?.trim() || "Player",
-    avatarDataUrl: profile.avatarDataUrl,
-    lastSeenAt: now
-  };
 }
 
 function loadRenderer(targetWindow: BrowserWindow, query?: Record<string, string>): void {
@@ -203,6 +191,7 @@ function setMainWindowCompact(compact: boolean): void {
   }
 
   if (compact === isMainWindowCompact) {
+    mainWindow.setSkipTaskbar(compact);
     mainWindow.webContents.send("window:compact-mode", compact);
     return;
   }
@@ -211,9 +200,11 @@ function setMainWindowCompact(compact: boolean): void {
     rememberMainWindowBounds();
     const normalBounds = lastMainWindowBounds ?? mainWindow.getBounds();
     isMainWindowCompact = true;
+    mainWindow.setSkipTaskbar(true);
     mainWindow.setBounds(getCompactBounds(normalBounds), false);
   } else {
     isMainWindowCompact = false;
+    mainWindow.setSkipTaskbar(false);
     restoreMainWindowBounds();
     mainWindow.show();
     mainWindow.focus();
@@ -248,6 +239,7 @@ function showMainWindow(): void {
   if (wasCompact) {
     setMainWindowCompact(false);
   } else {
+    mainWindow?.setSkipTaskbar(false);
     restoreMainWindowBounds();
   }
   mainWindow?.show();
@@ -261,6 +253,7 @@ function hideMainWindowToTray(): void {
   }
 
   rememberMainWindowBounds();
+  mainWindow.setSkipTaskbar(true);
   mainWindow.hide();
   updateTrayMenu();
 }
@@ -352,7 +345,7 @@ function createWindow(): void {
     }
 
     event.preventDefault();
-    hideMainWindowToTray();
+    setMainWindowCompact(true);
   });
   mainWindow.on("show", updateTrayMenu);
   mainWindow.on("hide", updateTrayMenu);
@@ -365,24 +358,16 @@ function createWindow(): void {
 function registerIpc(): void {
   ipcMain.handle("state:get", () => latestState);
 
-  ipcMain.handle("profile:get", async () => profileStore.load());
-
-  ipcMain.handle("profile:save", async (_event, profile: Partial<UserProfile>) => {
-    const nextProfile = normalizeProfile(profile);
-    await profileStore.save(nextProfile);
-    return nextProfile;
-  });
-
   ipcMain.handle("network:addresses", () => listLanUrls(DEFAULT_PORT));
 
-  ipcMain.handle("host:start", async (_event, profile: UserProfile) => {
+  ipcMain.handle("host:start", async () => {
     if (!lanServer) {
       lanServer = new LanServer(hostStore);
     }
 
-    currentHostInfo = await lanServer.start(normalizeProfile(profile), DEFAULT_PORT);
+    currentHostInfo = await lanServer.start(DEFAULT_PORT);
     emitHostInfo(currentHostInfo);
-    await getClient().connect(`ws://127.0.0.1:${currentHostInfo.port}`, normalizeProfile(profile));
+    await getClient().connect(`ws://127.0.0.1:${currentHostInfo.port}`);
     return currentHostInfo;
   });
 
@@ -394,9 +379,21 @@ function registerIpc(): void {
     emitHostInfo(null);
   });
 
-  ipcMain.handle("client:join", async (_event, address: string, profile: UserProfile) => {
-    const connectedUrl = await getClient().connect(address, normalizeProfile(profile));
+  ipcMain.handle("client:join", async (_event, address: string) => {
+    const connectedUrl = await getClient().connect(address);
     return connectedUrl;
+  });
+
+  ipcMain.handle("account:login", (_event, accountId: string) => {
+    return getClient().loginAccount(accountId);
+  });
+
+  ipcMain.handle("account:register", (_event, accountId: string) => {
+    return getClient().registerAccount(accountId);
+  });
+
+  ipcMain.handle("account:update-profile", (_event, profile: ProfileUpdateRequest) => {
+    return getClient().updateAccountProfile(profile);
   });
 
   ipcMain.handle("client:disconnect", () => {
@@ -452,7 +449,15 @@ function registerIpc(): void {
   ipcMain.handle("window:move-compact-by", (_event, deltaX: number, deltaY: number) => {
     moveMainCompactWindowBy(deltaX, deltaY);
   });
-  ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
+  ipcMain.handle("window:close", (event) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    if (targetWindow === mainWindow) {
+      setMainWindowCompact(true);
+      return;
+    }
+
+    targetWindow?.close();
+  });
   ipcMain.handle("window:set-always-on-top", (_event, enabled: boolean) => {
     mainWindow?.setAlwaysOnTop(enabled, "floating");
     return enabled;
@@ -462,7 +467,6 @@ function registerIpc(): void {
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.projectmoga.coworkagentslan");
   await loadAppIcon();
-  profileStore = new ProfileStore(app.getPath("userData"));
   hostStore = new HostDataStore(app.getPath("userData"));
   registerIpc();
   createTray();

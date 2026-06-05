@@ -338,7 +338,8 @@ textarea,
 }
 
 .setup-panel,
-.connect-panel {
+.connect-panel,
+.account-panel {
   display: flex;
   flex-direction: column;
 }
@@ -380,6 +381,30 @@ textarea,
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 750;
+}
+
+.account-layout {
+  display: grid;
+  gap: 12px;
+  padding: 26px 32px 20px;
+}
+
+.account-field label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.account-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.account-status-line {
+  margin: 0;
 }
 
 input,
@@ -589,6 +614,32 @@ select option {
   min-width: 0;
 }
 
+.current-user-avatar {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    filter 140ms ease,
+    transform 140ms ease;
+}
+
+.current-user-avatar:hover {
+  filter: saturate(1.08) brightness(1.03);
+  transform: translateY(-1px);
+}
+
+.current-user-avatar:focus-visible {
+  outline: 3px solid rgba(19, 119, 255, 0.22);
+  outline-offset: 3px;
+}
+
 .current-user span {
   width: 62px;
   overflow: hidden;
@@ -649,6 +700,7 @@ select option {
 }
 
 .status-pill {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -658,9 +710,38 @@ select option {
   background: linear-gradient(180deg, rgba(224, 255, 254, 0.94), rgba(190, 243, 242, 0.74));
   border: 1px solid rgba(0, 131, 129, 0.24);
   border-radius: 999px;
+  cursor: pointer;
   font-size: 11px;
   font-weight: 850;
+  letter-spacing: 0;
   box-shadow: var(--shadow-control);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.status-pill:hover {
+  color: #005f5a;
+  background: linear-gradient(180deg, rgba(236, 255, 254, 0.98), rgba(202, 249, 248, 0.82));
+  border-color: rgba(0, 131, 129, 0.36);
+  transform: translateY(-1px);
+}
+
+.status-pill:focus-visible {
+  outline: 3px solid rgba(0, 167, 165, 0.2);
+  outline-offset: 2px;
+}
+
+.status-pill[aria-disabled="true"] {
+  cursor: default;
+}
+
+.status-pill-copied {
+  color: #075f48;
+  background: linear-gradient(180deg, rgba(226, 255, 240, 0.98), rgba(184, 245, 218, 0.82));
+  border-color: rgba(0, 157, 120, 0.32);
 }
 
 .task-list {

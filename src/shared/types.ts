@@ -2,6 +2,7 @@ export const DEFAULT_PORT = 48731;
 export const MAX_TASK_SCREENSHOTS = 5;
 export const MAX_SCREENSHOT_EDGE = 1280;
 export const TRASH_RETENTION_DAYS = 14;
+export const ACCOUNT_ID_LENGTH = 11;
 
 export interface TaskScreenshot {
   id: string;
@@ -18,6 +19,17 @@ export interface UserProfile {
   name: string;
   avatarDataUrl?: string;
   lastSeenAt: string;
+  profileComplete?: boolean;
+}
+
+export interface ProfileUpdateRequest {
+  name: string;
+  avatarDataUrl?: string;
+}
+
+export interface AccountAuthResult {
+  profile: UserProfile;
+  requiresProfileSetup: boolean;
 }
 
 export interface Task {
@@ -51,8 +63,16 @@ export interface ConnectionStatus {
 
 export type ClientToServerMessage =
   | {
-      type: "client:join";
-      profile: UserProfile;
+      type: "account:login";
+      accountId: string;
+    }
+  | {
+      type: "account:register";
+      accountId: string;
+    }
+  | {
+      type: "account:updateProfile";
+      profile: ProfileUpdateRequest;
     }
   | {
       type: "task:create";
@@ -87,6 +107,11 @@ export type ClientToServerMessage =
 export type ServerToClientMessage =
   | {
       type: "state:full" | "state:update";
+      state: HostData;
+    }
+  | {
+      type: "account:loginSuccess" | "account:profileRequired" | "account:registered" | "account:profileUpdated";
+      profile: UserProfile;
       state: HostData;
     }
   | {

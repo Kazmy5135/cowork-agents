@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
-import type { HostData, UserProfile } from "../../src/shared/types";
+import type { HostData } from "../../src/shared/types";
 
 const EMPTY_HOST_DATA: HostData = {
   users: [],
@@ -41,21 +41,5 @@ export class HostDataStore {
 
   async save(data: HostData): Promise<void> {
     await writeJsonFile(this.filePath, data);
-  }
-}
-
-export class ProfileStore {
-  private readonly filePath: string;
-
-  constructor(userDataPath: string) {
-    this.filePath = join(userDataPath, "profile.json");
-  }
-
-  async load(): Promise<UserProfile | null> {
-    return readJsonFile<UserProfile>(this.filePath);
-  }
-
-  async save(profile: UserProfile): Promise<void> {
-    await writeJsonFile(this.filePath, profile);
   }
 }
