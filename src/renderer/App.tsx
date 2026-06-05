@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ClipboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   AlertCircle,
   Check,
@@ -11,8 +11,10 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Save,
   Server,
+  Settings,
   Trash2,
   Upload,
   UserRound,
@@ -22,6 +24,7 @@ import {
 import {
   MAX_SCREENSHOT_EDGE,
   MAX_TASK_SCREENSHOTS,
+  TRASH_RETENTION_DAYS,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
@@ -34,6 +37,21 @@ const EMPTY_STATE: HostData = {
   users: [],
   tasks: []
 };
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
+const trashDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit"
+});
+
+interface CompactTaskSnapshot {
+  id: string;
+  title: string;
+  description: string;
+  assigneeId?: string;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -45,6 +63,94 @@ function initials(name: string): string {
     return "?";
   }
   return clean.slice(0, 2).toUpperCase();
+}
+
+function isTaskInTrash(task: Task): boolean {
+  return Boolean(task.trashedAt);
+}
+
+function isExpiredTrashedTask(task: Task, nowMs = Date.now()): boolean {
+  if (!task.trashedAt) {
+    return false;
+  }
+
+  const trashedAtMs = Date.parse(task.trashedAt);
+  return Number.isFinite(trashedAtMs) && nowMs - trashedAtMs >= TRASH_RETENTION_MS;
+}
+
+function getTrashDaysLeft(task: Task): number {
+  const trashedAtMs = Date.parse(task.trashedAt ?? "");
+  if (!Number.isFinite(trashedAtMs)) {
+    return TRASH_RETENTION_DAYS;
+  }
+
+  return Math.max(0, Math.ceil((trashedAtMs + TRASH_RETENTION_MS - Date.now()) / MS_PER_DAY));
+}
+
+function formatTrashDate(isoDate: string | undefined): string {
+  if (!isoDate) {
+    return "未知时间";
+  }
+
+  const date = new Date(isoDate);
+  if (!Number.isFinite(date.getTime())) {
+    return "未知时间";
+  }
+
+  return trashDateFormatter.format(date);
+}
+
+function createCompactTaskSnapshot(tasks: Task[]): Map<string, CompactTaskSnapshot> {
+  return new Map(
+    tasks.map((task) => [
+      task.id,
+      {
+        id: task.id,
+        title: task.title,
+        description: task.description ?? "",
+        assigneeId: task.assigneeId
+      }
+    ])
+  );
+}
+
+function countMyActiveTasks(tasks: Task[], userId: string): number {
+  return tasks.filter((task) => !isTaskInTrash(task) && task.assigneeId === userId).length;
+}
+
+function countCompactTaskChanges(tasks: Task[], snapshot: Map<string, CompactTaskSnapshot> | null, userId: string): number {
+  if (!snapshot) {
+    return 0;
+  }
+
+  return tasks.reduce((count, task) => {
+    if (isTaskInTrash(task) || task.assigneeId !== userId) {
+      return count;
+    }
+
+    const previous = snapshot.get(task.id);
+    if (!previous) {
+      return count + 1;
+    }
+
+    if (previous.assigneeId !== userId) {
+      return count + 1;
+    }
+
+    let nextCount = count;
+    if (previous.title !== task.title) {
+      nextCount += 1;
+    }
+    if (previous.description !== (task.description ?? "")) {
+      nextCount += 1;
+    }
+
+    return nextCount;
+  }, 0);
+}
+
+function formatBadgeCount(count: number): string {
+  return count > 99 ? "99+" : String(count);
 }
 
 function getDetailRoute(): { isDetail: boolean; taskId: string | null } {
@@ -111,13 +217,127 @@ function Avatar({ user, size = "md" }: { user?: UserProfile; size?: "sm" | "md" 
   );
 }
 
-function WindowControls({ pinned, onTogglePin }: { pinned: boolean; onTogglePin: () => void }) {
+function CompactIcon({
+  user,
+  taskCount,
+  changeCount,
+  onRestore
+}: {
+  user?: UserProfile;
+  taskCount: number;
+  changeCount: number;
+  onRestore: () => void;
+}) {
+  const displayName = user?.name ?? "Player";
+  const dragState = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+  } | null>(null);
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragState.current = {
+      pointerId: event.pointerId,
+      startX: event.screenX,
+      startY: event.screenY,
+      lastX: event.screenX,
+      lastY: event.screenY,
+      moved: false
+    };
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const currentDrag = dragState.current;
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.screenX - currentDrag.lastX;
+    const deltaY = event.screenY - currentDrag.lastY;
+    currentDrag.lastX = event.screenX;
+    currentDrag.lastY = event.screenY;
+
+    if (Math.abs(event.screenX - currentDrag.startX) > 3 || Math.abs(event.screenY - currentDrag.startY) > 3) {
+      currentDrag.moved = true;
+    }
+
+    if (deltaX !== 0 || deltaY !== 0) {
+      void window.coWorkApi.moveCompactWindowBy(deltaX, deltaY);
+    }
+  }
+
+  function finishPointerGesture(event: ReactPointerEvent<HTMLButtonElement>) {
+    const currentDrag = dragState.current;
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    dragState.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (!currentDrag.moved) {
+      onRestore();
+    }
+  }
+
+  return (
+    <main className="compact-panel">
+      <button
+        className="compact-icon"
+        type="button"
+        title="展开协作工具"
+        aria-label="展开协作工具"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishPointerGesture}
+        onPointerCancel={finishPointerGesture}
+      >
+        <span className="compact-icon-art" aria-hidden="true">
+          <span className="compact-avatar-face">
+            {user?.avatarDataUrl ? <img src={user.avatarDataUrl} alt="" draggable={false} /> : <span>{initials(displayName)}</span>}
+          </span>
+          <span className="compact-name">{displayName}</span>
+          {changeCount > 0 ? <span className="compact-badge compact-badge-danger">{formatBadgeCount(changeCount)}</span> : null}
+          <span className="compact-badge compact-badge-success">{formatBadgeCount(taskCount)}</span>
+        </span>
+      </button>
+    </main>
+  );
+}
+
+function WindowControls({
+  pinned,
+  onTogglePin,
+  onOpenSettings,
+  onMinimize
+}: {
+  pinned: boolean;
+  onTogglePin: () => void;
+  onOpenSettings?: () => void;
+  onMinimize?: () => void;
+}) {
   return (
     <div className="window-controls">
       <button className="icon-button" title={pinned ? "取消置顶" : "窗口置顶"} onClick={onTogglePin}>
         {pinned ? <Pin size={14} /> : <PinOff size={14} />}
       </button>
-      <button className="icon-button" title="最小化" onClick={() => void window.coWorkApi.minimizeWindow()}>
+      {onOpenSettings ? (
+        <button className="icon-button" title="设置" onClick={onOpenSettings}>
+          <Settings size={14} />
+        </button>
+      ) : null}
+      <button className="icon-button" title="最小化" onClick={onMinimize ?? (() => void window.coWorkApi.minimizeWindow())}>
         <Minus size={15} />
       </button>
       <button className="icon-button danger" title="关闭" onClick={() => void window.coWorkApi.closeWindow()}>
@@ -142,10 +362,12 @@ function DetailWindowControls() {
 
 function SetupView({
   initialProfile,
-  onSaved
+  onSaved,
+  onMinimize
 }: {
   initialProfile: UserProfile | null;
   onSaved: (profile: UserProfile) => void;
+  onMinimize: () => void;
 }) {
   const [name, setName] = useState(initialProfile?.name ?? "");
   const [avatarDataUrl, setAvatarDataUrl] = useState(initialProfile?.avatarDataUrl ?? "");
@@ -198,7 +420,7 @@ function SetupView({
     <main className="app-panel setup-panel">
       <div className="drag-bar">
         <span>协作任务</span>
-        <WindowControls pinned={true} onTogglePin={() => undefined} />
+        <WindowControls pinned={true} onTogglePin={() => undefined} onMinimize={onMinimize} />
       </div>
       <section className="identity-layout">
         <label className="avatar-picker">
@@ -239,13 +461,17 @@ function ConnectView({
   status,
   hostInfo,
   lanUrls,
-  onConnected
+  onConnected,
+  onEditProfile,
+  onMinimize
 }: {
   profile: UserProfile;
   status: ConnectionStatus;
   hostInfo: HostInfo | null;
   lanUrls: string[];
   onConnected: () => void;
+  onEditProfile: () => void;
+  onMinimize: () => void;
 }) {
   const [joinAddress, setJoinAddress] = useState("");
   const [busy, setBusy] = useState<"host" | "join" | null>(null);
@@ -281,10 +507,12 @@ function ConnectView({
     <main className="app-panel connect-panel">
       <div className="drag-bar">
         <div className="profile-strip">
-          <Avatar user={profile} size="sm" />
+          <button className="profile-avatar-button" title="更换用户" aria-label="更换用户" disabled={busy !== null} onClick={onEditProfile}>
+            <Avatar user={profile} size="sm" />
+          </button>
           <span>{profile.name}</span>
         </div>
-        <WindowControls pinned={true} onTogglePin={() => undefined} />
+        <WindowControls pinned={true} onTogglePin={() => undefined} onMinimize={onMinimize} />
       </div>
       <section className="connect-grid">
         <button className="connect-action" disabled={busy !== null} onClick={() => void startHost()}>
@@ -323,16 +551,18 @@ function TaskRow({
   assignee,
   onToggle,
   onAssignClick,
-  onOpenDetail
+  onOpenDetail,
+  onOpenMenu
 }: {
   task: Task;
   assignee?: UserProfile;
   onToggle: (task: Task) => void;
   onAssignClick: (task: Task) => void;
   onOpenDetail: (task: Task) => void;
+  onOpenMenu: (task: Task, event: MouseEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <div className={`task-row ${task.completed ? "task-done" : ""}`}>
+    <div className={`task-row ${task.completed ? "task-done" : ""}`} onContextMenu={(event) => onOpenMenu(task, event)}>
       <button className="task-check" title={task.completed ? "标记为未完成" : "标记为完成"} onClick={() => onToggle(task)}>
         {task.completed ? <Check size={18} /> : <Circle size={18} />}
       </button>
@@ -346,6 +576,36 @@ function TaskRow({
       >
         {assignee ? <Avatar user={assignee} size="sm" /> : <Plus size={18} />}
       </button>
+    </div>
+  );
+}
+
+function TaskContextMenu({
+  task,
+  x,
+  y,
+  onMoveToTrash
+}: {
+  task: Task;
+  x: number;
+  y: number;
+  onMoveToTrash: (task: Task) => Promise<void>;
+}) {
+  return (
+    <div className="task-menu-layer">
+      <div
+        className="task-context-menu"
+        style={{ left: x, top: y }}
+        role="menu"
+        aria-label={`${task.title} 的任务菜单`}
+        onContextMenu={(event) => event.preventDefault()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button className="task-menu-item danger" role="menuitem" onClick={() => void onMoveToTrash(task)}>
+          <Trash2 size={14} />
+          移动到垃圾桶
+        </button>
+      </div>
     </div>
   );
 }
@@ -383,13 +643,89 @@ function AssignmentPopover({
   );
 }
 
+function SettingsPanel({
+  trashedTasks,
+  onClose,
+  onOpenTask,
+  onRestoreTask
+}: {
+  trashedTasks: Task[];
+  onClose: () => void;
+  onOpenTask: (task: Task) => Promise<void>;
+  onRestoreTask: (task: Task) => Promise<void>;
+}) {
+  const sortedTrashedTasks = useMemo(
+    () =>
+      [...trashedTasks].sort((left, right) => {
+        return Date.parse(right.trashedAt ?? right.updatedAt) - Date.parse(left.trashedAt ?? left.updatedAt);
+      }),
+    [trashedTasks]
+  );
+
+  return (
+    <div className="settings-panel" role="dialog" aria-label="基础设置">
+      <aside className="settings-sidebar">
+        <div className="settings-title">基础设置</div>
+        <button className="settings-nav-item selected" type="button" aria-pressed="true">
+          <Trash2 size={15} />
+          <span>垃圾桶</span>
+          <strong>{sortedTrashedTasks.length}</strong>
+        </button>
+      </aside>
+
+      <section className="settings-content">
+        <header className="settings-content-header">
+          <div>
+            <p>垃圾桶</p>
+            <span>{TRASH_RETENTION_DAYS} 天后永久清除</span>
+          </div>
+          <button className="icon-button" title="关闭设置" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
+
+        {sortedTrashedTasks.length === 0 ? (
+          <div className="trash-empty">14 天内没有移入垃圾桶的任务</div>
+        ) : (
+          <div className="trash-list">
+            {sortedTrashedTasks.map((task) => {
+              const daysLeft = getTrashDaysLeft(task);
+              return (
+                <article key={task.id} className="trash-item">
+                  <button className="trash-item-main" type="button" title="打开任务详情" onClick={() => void onOpenTask(task)}>
+                    <h3>{task.title}</h3>
+                    <p>移入时间 {formatTrashDate(task.trashedAt)}</p>
+                  </button>
+                  <button
+                    className="trash-restore-button"
+                    type="button"
+                    title="恢复任务"
+                    aria-label={`恢复任务 ${task.title}`}
+                    onClick={() => void onRestoreTask(task)}
+                  >
+                    <span className="trash-restore-label trash-restore-label-expiry">
+                      {daysLeft > 0 ? `${daysLeft} 天后清除` : "即将清除"}
+                    </span>
+                    <span className="trash-restore-label trash-restore-label-action">恢复</span>
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function TaskApp({
   profile,
   state,
   status,
   hostInfo,
   pinned,
-  onTogglePin
+  onTogglePin,
+  onMinimize
 }: {
   profile: UserProfile;
   state: HostData;
@@ -397,12 +733,15 @@ function TaskApp({
   hostInfo: HostInfo | null;
   pinned: boolean;
   onTogglePin: () => void;
+  onMinimize: () => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
   const [showMineOnly, setShowMineOnly] = useState(false);
   const [activeAssignmentTaskId, setActiveAssignmentTaskId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
 
   const users = useMemo(() => {
     const byId = new Map<string, UserProfile>();
@@ -424,15 +763,58 @@ function TaskApp({
     [state.tasks]
   );
 
+  const activeTasks = useMemo(() => sortedTasks.filter((task) => !isTaskInTrash(task)), [sortedTasks]);
+
+  const trashedTasks = useMemo(
+    () => sortedTasks.filter((task) => isTaskInTrash(task) && !isExpiredTrashedTask(task)),
+    [sortedTasks]
+  );
+
   const visibleTasks = useMemo(
-    () => (showMineOnly ? sortedTasks.filter((task) => task.assigneeId === profile.id) : sortedTasks),
-    [profile.id, showMineOnly, sortedTasks]
+    () => (showMineOnly ? activeTasks.filter((task) => task.assigneeId === profile.id) : activeTasks),
+    [activeTasks, profile.id, showMineOnly]
   );
 
   const activeAssignmentTask = useMemo(
-    () => state.tasks.find((task) => task.id === activeAssignmentTaskId),
-    [activeAssignmentTaskId, state.tasks]
+    () => activeTasks.find((task) => task.id === activeAssignmentTaskId),
+    [activeAssignmentTaskId, activeTasks]
   );
+
+  useEffect(() => {
+    if (activeAssignmentTaskId && !activeTasks.some((task) => task.id === activeAssignmentTaskId)) {
+      setActiveAssignmentTaskId(null);
+    }
+  }, [activeAssignmentTaskId, activeTasks]);
+
+  useEffect(() => {
+    if (taskMenu && !activeTasks.some((task) => task.id === taskMenu.taskId)) {
+      setTaskMenu(null);
+    }
+  }, [activeTasks, taskMenu]);
+
+  useEffect(() => {
+    if (!taskMenu) {
+      return;
+    }
+
+    function closeTaskMenu() {
+      setTaskMenu(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setTaskMenu(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", closeTaskMenu);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", closeTaskMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [taskMenu]);
 
   async function createTask() {
     const cleanTitle = title.trim();
@@ -455,6 +837,44 @@ function TaskApp({
     await window.coWorkApi.openTaskDetail(task.id);
   }
 
+  function openTaskMenu(task: Task, event: MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSettingsOpen(false);
+
+    const menuWidth = 164;
+    const menuHeight = 40;
+    setTaskMenu({
+      taskId: task.id,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
+    });
+  }
+
+  async function moveTaskToTrash(task: Task) {
+    setTaskMenu(null);
+    setActiveAssignmentTaskId(null);
+    setError("");
+
+    try {
+      await window.coWorkApi.moveTaskToTrash(task.id);
+    } catch (trashError) {
+      setError(trashError instanceof Error ? trashError.message : "移动到垃圾桶失败。");
+    }
+  }
+
+  async function restoreTask(task: Task) {
+    setTaskMenu(null);
+    setActiveAssignmentTaskId(null);
+    setError("");
+
+    try {
+      await window.coWorkApi.restoreTask(task.id);
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "恢复任务失败。");
+    }
+  }
+
   async function assignTask(userId: string) {
     if (!activeAssignmentTaskId) {
       return;
@@ -468,6 +888,8 @@ function TaskApp({
       setError(assignError instanceof Error ? assignError.message : "分配任务失败。");
     }
   }
+
+  const contextMenuTask = taskMenu ? activeTasks.find((task) => task.id === taskMenu.taskId) : null;
 
   return (
     <main className="app-panel task-panel">
@@ -493,7 +915,16 @@ function TaskApp({
             <Wifi size={13} />
             <span>{hostInfo ? "Host" : status.phase === "connected" ? "Client" : "LAN"}</span>
           </div>
-          <WindowControls pinned={pinned} onTogglePin={onTogglePin} />
+          <WindowControls
+            pinned={pinned}
+            onTogglePin={onTogglePin}
+            onOpenSettings={() => {
+              setTaskMenu(null);
+              setActiveAssignmentTaskId(null);
+              setSettingsOpen((current) => !current);
+            }}
+            onMinimize={onMinimize}
+          />
         </div>
 
         <div className="task-list">
@@ -508,6 +939,7 @@ function TaskApp({
                 onToggle={(item) => void toggleTask(item)}
                 onAssignClick={(item) => setActiveAssignmentTaskId(item.id)}
                 onOpenDetail={(item) => void openTaskDetail(item)}
+                onOpenMenu={(item, event) => openTaskMenu(item, event)}
               />
             ))
           )}
@@ -519,6 +951,24 @@ function TaskApp({
             currentAssigneeId={activeAssignmentTask.assigneeId}
             onAssign={(userId) => void assignTask(userId)}
             onClose={() => setActiveAssignmentTaskId(null)}
+          />
+        ) : null}
+
+        {settingsOpen ? (
+          <SettingsPanel
+            trashedTasks={trashedTasks}
+            onClose={() => setSettingsOpen(false)}
+            onOpenTask={openTaskDetail}
+            onRestoreTask={restoreTask}
+          />
+        ) : null}
+
+        {contextMenuTask && taskMenu ? (
+          <TaskContextMenu
+            task={contextMenuTask}
+            x={taskMenu.x}
+            y={taskMenu.y}
+            onMoveToTrash={moveTaskToTrash}
           />
         ) : null}
 
@@ -564,6 +1014,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
   const [error, setError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [preview, setPreview] = useState<TaskScreenshot | null>(null);
 
   useEffect(() => {
@@ -635,6 +1086,25 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
     }
   }
 
+  async function restoreTaskFromDetail() {
+    if (!task) {
+      return;
+    }
+
+    setRestoring(true);
+    setError("");
+    setSavedMessage("");
+
+    try {
+      await window.coWorkApi.restoreTask(task.id);
+      setSavedMessage("已恢复");
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "恢复任务失败。");
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   if (!task) {
     return (
       <main className="detail-window">
@@ -649,6 +1119,8 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
       </main>
     );
   }
+
+  const taskIsTrashed = isTaskInTrash(task);
 
   return (
     <main className="detail-window" onPaste={(event) => void handlePaste(event)}>
@@ -753,6 +1225,12 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
           {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
           保存
         </button>
+        {taskIsTrashed ? (
+          <button className="primary-button restore-button" disabled={restoring} onClick={() => void restoreTaskFromDetail()}>
+            {restoring ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
+            恢复
+          </button>
+        ) : null}
       </footer>
 
       {preview ? (
@@ -779,7 +1257,10 @@ export function App() {
   const [lanUrls, setLanUrls] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const [pinned, setPinned] = useState(true);
+  const [compactMode, setCompactMode] = useState(false);
+  const [compactTaskSnapshot, setCompactTaskSnapshot] = useState<Map<string, CompactTaskSnapshot> | null>(null);
 
   useEffect(() => {
     const cleanupState = window.coWorkApi.onState((nextState) => {
@@ -793,6 +1274,7 @@ export function App() {
       }
     });
     const cleanupHost = window.coWorkApi.onHostInfo(setHostInfo);
+    const cleanupCompactMode = window.coWorkApi.onCompactMode(setCompactMode);
 
     void window.coWorkApi.getLocalProfile().then((savedProfile) => {
       setProfile(savedProfile);
@@ -805,6 +1287,7 @@ export function App() {
       cleanupState();
       cleanupStatus();
       cleanupHost();
+      cleanupCompactMode();
     };
   }, []);
 
@@ -813,6 +1296,32 @@ export function App() {
     await window.coWorkApi.setAlwaysOnTop(next);
     setPinned(next);
   }
+
+  function enterCompactMode() {
+    setCompactTaskSnapshot(createCompactTaskSnapshot(state.tasks));
+    setCompactMode(true);
+    void window.coWorkApi.minimizeWindow();
+  }
+
+  async function restoreFromCompactMode() {
+    setCompactMode(false);
+    setCompactTaskSnapshot(null);
+    await window.coWorkApi.restoreWindow();
+  }
+
+  const compactMetrics = useMemo(() => {
+    if (!profile) {
+      return {
+        taskCount: 0,
+        changeCount: 0
+      };
+    }
+
+    return {
+      taskCount: countMyActiveTasks(state.tasks, profile.id),
+      changeCount: countCompactTaskChanges(state.tasks, compactTaskSnapshot, profile.id)
+    };
+  }, [compactTaskSnapshot, profile, state.tasks]);
 
   if (loading) {
     return (
@@ -826,8 +1335,28 @@ export function App() {
     return <TaskDetailView taskId={detailRoute.taskId} state={state} />;
   }
 
-  if (!profile) {
-    return <SetupView initialProfile={profile} onSaved={setProfile} />;
+  if (compactMode) {
+    return (
+      <CompactIcon
+        user={profile ?? undefined}
+        taskCount={compactMetrics.taskCount}
+        changeCount={compactMetrics.changeCount}
+        onRestore={() => void restoreFromCompactMode()}
+      />
+    );
+  }
+
+  if (!profile || editingProfile) {
+    return (
+      <SetupView
+        initialProfile={profile}
+        onSaved={(nextProfile) => {
+          setProfile(nextProfile);
+          setEditingProfile(false);
+        }}
+        onMinimize={enterCompactMode}
+      />
+    );
   }
 
   if (!connected) {
@@ -838,6 +1367,8 @@ export function App() {
         hostInfo={hostInfo}
         lanUrls={lanUrls}
         onConnected={() => setConnected(true)}
+        onEditProfile={() => setEditingProfile(true)}
+        onMinimize={enterCompactMode}
       />
     );
   }
@@ -850,6 +1381,7 @@ export function App() {
       hostInfo={hostInfo}
       pinned={pinned}
       onTogglePin={() => void togglePinned()}
+      onMinimize={enterCompactMode}
     />
   );
 }

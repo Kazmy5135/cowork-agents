@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   DEFAULT_PORT,
   MAX_TASK_SCREENSHOTS,
+  TRASH_RETENTION_DAYS,
   type ClientToServerMessage,
   type HostData,
   type HostInfo,
@@ -14,6 +15,10 @@ import {
   type UserProfile
 } from "../../src/shared/types";
 import { HostDataStore } from "./data-store";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
+const TRASH_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 function getLanAddresses(port: number): string[] {
   const interfaces = networkInterfaces();
@@ -57,6 +62,15 @@ function normalizeTask(task: Task): Task {
   };
 }
 
+function isExpiredTrashedTask(task: Task, nowMs = Date.now()): boolean {
+  if (!task.trashedAt) {
+    return false;
+  }
+
+  const trashedAtMs = Date.parse(task.trashedAt);
+  return Number.isFinite(trashedAtMs) && nowMs - trashedAtMs >= TRASH_RETENTION_MS;
+}
+
 function validateScreenshots(screenshots: TaskScreenshot[]): TaskScreenshot[] {
   if (screenshots.length > MAX_TASK_SCREENSHOTS) {
     throw new Error(`每个任务最多只能附加 ${MAX_TASK_SCREENSHOTS} 张截图。`);
@@ -88,6 +102,7 @@ export class LanServer {
   private data: HostData = { users: [], tasks: [] };
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
+  private cleanupTimer: NodeJS.Timeout | null = null;
   private readonly store: HostDataStore;
 
   constructor(store: HostDataStore) {
@@ -104,6 +119,7 @@ export class LanServer {
       users: this.data.users,
       tasks: this.data.tasks.map(normalizeTask)
     };
+    await this.deleteExpiredTrashedTasks();
     await this.upsertUser(hostProfile);
 
     this.httpServer = createServer((request, response) => {
@@ -119,6 +135,7 @@ export class LanServer {
 
     this.wsServer = new WebSocketServer({ server: this.httpServer });
     this.wsServer.on("connection", (socket) => this.handleConnection(socket));
+    this.startCleanupTimer();
 
     await new Promise<void>((resolve, reject) => {
       const server = this.httpServer;
@@ -154,6 +171,10 @@ export class LanServer {
     const httpServer = this.httpServer;
     this.wsServer = null;
     this.httpServer = null;
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
 
     wsServer?.clients.forEach((client) => client.close(1001, "Host stopped"));
     await new Promise<void>((resolve) => {
@@ -180,6 +201,23 @@ export class LanServer {
     };
   }
 
+  private startCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      return;
+    }
+
+    this.cleanupTimer = setInterval(() => {
+      void this.deleteExpiredTrashedTasks()
+        .then((deleted) => {
+          if (deleted) {
+            this.broadcast({ type: "state:update", state: cloneState(this.data) });
+          }
+        })
+        .catch(() => undefined);
+    }, TRASH_CLEANUP_INTERVAL_MS);
+    this.cleanupTimer.unref?.();
+  }
+
   private handleConnection(socket: WebSocket): void {
     socket.on("message", (raw) => {
       void this.handleMessage(socket, raw.toString());
@@ -197,6 +235,8 @@ export class LanServer {
     }
 
     try {
+      await this.deleteExpiredTrashedTasks();
+
       if (message.type === "client:join") {
         await this.upsertUser(message.profile);
         this.send(socket, { type: "state:full", state: cloneState(this.data) });
@@ -218,6 +258,18 @@ export class LanServer {
 
       if (message.type === "task:assign") {
         await this.assignTask(message.taskId, message.assigneeId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "task:trash") {
+        await this.moveTaskToTrash(message.taskId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "task:restore") {
+        await this.restoreTask(message.taskId);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
@@ -250,6 +302,36 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
+  private findActiveTask(taskId: string): Task {
+    const task = this.data.tasks.find((item) => item.id === taskId && !item.trashedAt);
+    if (!task) {
+      throw new Error("任务不存在或已不在列表中。");
+    }
+
+    return task;
+  }
+
+  private findRetainedTask(taskId: string): Task {
+    const task = this.data.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      throw new Error("任务不存在或已不在列表中。");
+    }
+
+    return task;
+  }
+
+  private async deleteExpiredTrashedTasks(): Promise<boolean> {
+    const previousLength = this.data.tasks.length;
+    this.data.tasks = this.data.tasks.filter((task) => !isExpiredTrashedTask(task));
+
+    if (this.data.tasks.length !== previousLength) {
+      await this.store.save(this.data);
+      return true;
+    }
+
+    return false;
+  }
+
   private async createTask(title: string): Promise<void> {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
@@ -272,10 +354,7 @@ export class LanServer {
   }
 
   private async toggleTask(taskId: string, completed: boolean): Promise<void> {
-    const task = this.data.tasks.find((item) => item.id === taskId);
-    if (!task) {
-      throw new Error("任务不存在或已不在列表中。");
-    }
+    const task = this.findActiveTask(taskId);
 
     task.completed = completed;
     task.updatedAt = new Date().toISOString();
@@ -283,10 +362,7 @@ export class LanServer {
   }
 
   private async assignTask(taskId: string, assigneeId: string): Promise<void> {
-    const task = this.data.tasks.find((item) => item.id === taskId);
-    if (!task) {
-      throw new Error("任务不存在或已不在列表中。");
-    }
+    const task = this.findActiveTask(taskId);
 
     if (!this.data.users.some((user) => user.id === assigneeId)) {
       throw new Error("负责人不存在或尚未连接。");
@@ -297,11 +373,30 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
-  private async updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): Promise<void> {
-    const task = this.data.tasks.find((item) => item.id === taskId);
-    if (!task) {
-      throw new Error("任务不存在或已不在列表中。");
+  private async moveTaskToTrash(taskId: string): Promise<void> {
+    const task = this.findActiveTask(taskId);
+    const now = new Date().toISOString();
+
+    task.trashedAt = now;
+    task.updatedAt = now;
+    await this.store.save(this.data);
+  }
+
+  private async restoreTask(taskId: string): Promise<void> {
+    const task = this.findRetainedTask(taskId);
+    const now = new Date().toISOString();
+
+    if (!task.trashedAt) {
+      return;
     }
+
+    delete task.trashedAt;
+    task.updatedAt = now;
+    await this.store.save(this.data);
+  }
+
+  private async updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): Promise<void> {
+    const task = this.findRetainedTask(taskId);
 
     const cleanTitle = title.trim();
     if (!cleanTitle) {

@@ -1,6 +1,7 @@
 export const DEFAULT_PORT = 48731;
 export const MAX_TASK_SCREENSHOTS = 5;
 export const MAX_SCREENSHOT_EDGE = 1280;
+export const TRASH_RETENTION_DAYS = 14;
 
 export interface TaskScreenshot {
   id: string;
@@ -26,6 +27,7 @@ export interface Task {
   screenshots?: TaskScreenshot[];
   assigneeId?: string;
   completed: boolean;
+  trashedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +67,14 @@ export type ClientToServerMessage =
       type: "task:assign";
       taskId: string;
       assigneeId: string;
+    }
+  | {
+      type: "task:trash";
+      taskId: string;
+    }
+  | {
+      type: "task:restore";
+      taskId: string;
     }
   | {
       type: "task:updateDetails";

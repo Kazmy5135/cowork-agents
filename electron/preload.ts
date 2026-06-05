@@ -17,10 +17,15 @@ contextBridge.exposeInMainWorld("coWorkApi", {
     ipcRenderer.invoke("task:toggle", taskId, completed) as Promise<void>,
   assignTask: (taskId: string, assigneeId: string) =>
     ipcRenderer.invoke("task:assign", taskId, assigneeId) as Promise<void>,
+  moveTaskToTrash: (taskId: string) => ipcRenderer.invoke("task:trash", taskId) as Promise<void>,
+  restoreTask: (taskId: string) => ipcRenderer.invoke("task:restore", taskId) as Promise<void>,
   updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) =>
     ipcRenderer.invoke("task:update-details", taskId, title, description, screenshots) as Promise<void>,
   openTaskDetail: (taskId: string) => ipcRenderer.invoke("task:open-detail", taskId) as Promise<void>,
   minimizeWindow: () => ipcRenderer.invoke("window:minimize") as Promise<void>,
+  restoreWindow: () => ipcRenderer.invoke("window:restore") as Promise<void>,
+  moveCompactWindowBy: (deltaX: number, deltaY: number) =>
+    ipcRenderer.invoke("window:move-compact-by", deltaX, deltaY) as Promise<void>,
   closeWindow: () => ipcRenderer.invoke("window:close") as Promise<void>,
   setAlwaysOnTop: (enabled: boolean) =>
     ipcRenderer.invoke("window:set-always-on-top", enabled) as Promise<boolean>,
@@ -38,5 +43,10 @@ contextBridge.exposeInMainWorld("coWorkApi", {
     const handler = (_event: Electron.IpcRendererEvent, info: HostInfo | null) => callback(info);
     ipcRenderer.on("host:info", handler);
     return () => ipcRenderer.removeListener("host:info", handler);
+  },
+  onCompactMode: (callback: (compact: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, compact: boolean) => callback(compact);
+    ipcRenderer.on("window:compact-mode", handler);
+    return () => ipcRenderer.removeListener("window:compact-mode", handler);
   }
 });

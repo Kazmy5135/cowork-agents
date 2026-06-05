@@ -118,6 +118,14 @@ export class LanClient {
     this.send({ type: "task:assign", taskId, assigneeId });
   }
 
+  moveTaskToTrash(taskId: string): void {
+    this.send({ type: "task:trash", taskId });
+  }
+
+  restoreTask(taskId: string): void {
+    this.send({ type: "task:restore", taskId });
+  }
+
   updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): void {
     this.send({ type: "task:updateDetails", taskId, title, description, screenshots });
   }
