@@ -1,14 +1,17 @@
 {
   "name": "cowork-agents-lan",
   "productName": "Cowork Agents LAN",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "LAN task progress companion for small game development teams.",
   "main": "dist-electron/electron/main/main.js",
   "scripts": {
     "dev": "concurrently -k -n renderer,electron-ts,electron -c cyan,green,magenta \"vite --host 0.0.0.0\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist-electron/electron/main/main.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "tsc -p tsconfig.electron.json && vite build",
-    "dist": "npm run build && electron-builder --win portable",
+    "dist": "npm run dist:win",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:portable": "npm run build && electron-builder --win portable",
+    "publish:win": "npm run build && electron-builder --win nsis --publish always",
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
@@ -23,15 +26,33 @@
       "package.json"
     ],
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Kazmy5135",
+        "repo": "cowork-agents"
+      }
+    ],
     "win": {
       "signAndEditExecutable": false,
       "target": [
-        "portable"
-      ],
-      "artifactName": "${productName}-${version}-portable.${ext}"
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Cowork-Agents-LAN-Setup-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "Cowork-Agents-LAN-${version}-portable.${ext}"
     }
   },
   "dependencies": {
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

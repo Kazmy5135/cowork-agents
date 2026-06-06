@@ -1467,7 +1467,7 @@ select option {
 
 .settings-sidebar {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   gap: 8px;
   min-width: 0;
   padding: 10px 7px;
@@ -1554,6 +1554,111 @@ select option {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 750;
+}
+
+.update-panel-content {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  min-height: 0;
+}
+
+.update-status {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  background: var(--raised-glass);
+  border: 1px solid var(--stroke-raised);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-control);
+}
+
+.update-version-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.update-version-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(112, 149, 188, 0.18);
+  border-radius: var(--radius-control);
+}
+
+.update-version-grid span,
+.update-footnote {
+  overflow-wrap: anywhere;
+}
+
+.update-version-grid span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.update-version-grid strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-message {
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.update-message span {
+  overflow-wrap: anywhere;
+}
+
+.update-status-error .update-message {
+  color: var(--danger);
+}
+
+.update-status-downloaded .update-message,
+.update-status-not-available .update-message {
+  color: var(--success);
+}
+
+.update-progress {
+  height: 7px;
+  overflow: hidden;
+  background: rgba(19, 119, 255, 0.12);
+  border: 1px solid rgba(19, 119, 255, 0.18);
+  border-radius: 999px;
+}
+
+.update-progress-bar {
+  height: 100%;
+  min-width: 4px;
+  background: linear-gradient(90deg, #1a83ff, #00aaa7);
+  border-radius: inherit;
+  transition: width 160ms ease;
+}
+
+.update-action-button {
+  width: 100%;
+}
+
+.update-footnote {
+  color: var(--text-muted);
+  text-align: center;
 }
 
 .trash-empty {

@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Circle,
   Clipboard,
+  Download,
   GripVertical,
   Image as ImageIcon,
   Layers,
@@ -16,6 +17,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   Server,
@@ -34,6 +36,7 @@ import {
   MAX_TASK_SCREENSHOTS,
   TRASH_RETENTION_DAYS,
   type AccountAuthResult,
+  type AppUpdateState,
   type AppPreferences,
   type ConnectionStatus,
   type HostData,
@@ -49,6 +52,10 @@ const EMPTY_STATE: HostData = {
   versions: [],
   currentVersionId: "",
   tasks: []
+};
+const EMPTY_UPDATE_STATE: AppUpdateState = {
+  phase: "idle",
+  currentVersion: ""
 };
 const ACCOUNT_ID_REGEX = new RegExp(`^\\d{${ACCOUNT_ID_LENGTH}}$`);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -198,6 +205,66 @@ function countCompactTaskChanges(tasks: Task[], snapshot: Map<string, CompactTas
 
 function formatBadgeCount(count: number): string {
   return count > 99 ? "99+" : String(count);
+}
+
+function getReadableError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error) {
+    return error;
+  }
+
+  return fallback;
+}
+
+function formatUpdatePercent(percent: number | undefined): string {
+  if (typeof percent !== "number" || !Number.isFinite(percent)) {
+    return "0%";
+  }
+
+  return `${Math.round(Math.max(0, Math.min(100, percent)))}%`;
+}
+
+function getUpdateMessage(state: AppUpdateState): string {
+  if (state.message) {
+    return state.message;
+  }
+
+  switch (state.phase) {
+    case "checking":
+      return "正在检查更新...";
+    case "available":
+      return "发现新版本，正在下载...";
+    case "not-available":
+      return "已是最新版本。";
+    case "downloading":
+      return "正在下载更新...";
+    case "downloaded":
+      return "更新已下载完成，重启应用后安装。";
+    case "error":
+      return "检查更新失败。";
+    default:
+      return "点击检查更新，获取最新 release 版本。";
+  }
+}
+
+function getUpdateActionLabel(state: AppUpdateState): string {
+  switch (state.phase) {
+    case "checking":
+      return "正在检查";
+    case "downloading":
+      return `下载中 ${formatUpdatePercent(state.percent)}`;
+    case "downloaded":
+      return "重启安装";
+    default:
+      return "检查更新";
+  }
+}
+
+function isUpdateActionDisabled(state: AppUpdateState): boolean {
+  return state.phase === "checking" || state.phase === "downloading" || state.phase === "available";
 }
 
 function areStringArraysEqual(left: string[], right: string[]): boolean {
@@ -1700,6 +1767,163 @@ function SettingsPanel({
   );
 }
 
+function SettingsPanelWithUpdates({
+  trashedTasks,
+  updateState,
+  onClose,
+  onCheckForUpdates,
+  onInstallUpdate,
+  onOpenTask,
+  onRestoreTask
+}: {
+  trashedTasks: Task[];
+  updateState: AppUpdateState;
+  onClose: () => void;
+  onCheckForUpdates: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
+  onOpenTask: (task: Task) => Promise<void>;
+  onRestoreTask: (task: Task) => Promise<void>;
+}) {
+  const [activeSection, setActiveSection] = useState<"updates" | "trash">("updates");
+  const sortedTrashedTasks = useMemo(
+    () =>
+      [...trashedTasks].sort((left, right) => {
+        return Date.parse(right.trashedAt ?? right.updatedAt) - Date.parse(left.trashedAt ?? left.updatedAt);
+      }),
+    [trashedTasks]
+  );
+  const updateProgress = Math.max(0, Math.min(100, updateState.percent ?? 0));
+  const updateIsBusy = updateState.phase === "checking" || updateState.phase === "downloading";
+  const updateMessage = getUpdateMessage(updateState);
+  const activeTitle = activeSection === "updates" ? "应用更新" : "垃圾桶";
+  const activeSubtitle =
+    activeSection === "updates" ? `当前版本 ${updateState.currentVersion || "未知"}` : `${TRASH_RETENTION_DAYS} 天后永久清除`;
+
+  async function handleUpdateAction() {
+    if (updateState.phase === "downloaded") {
+      await onInstallUpdate();
+      return;
+    }
+
+    await onCheckForUpdates();
+  }
+
+  return (
+    <div className="settings-panel" role="dialog" aria-label="基础设置">
+      <aside className="settings-sidebar">
+        <div className="settings-title">基础设置</div>
+        <button
+          className={`settings-nav-item${activeSection === "updates" ? " selected" : ""}`}
+          type="button"
+          aria-pressed={activeSection === "updates"}
+          onClick={() => setActiveSection("updates")}
+        >
+          <Download size={15} />
+          <span>应用更新</span>
+        </button>
+        <button
+          className={`settings-nav-item${activeSection === "trash" ? " selected" : ""}`}
+          type="button"
+          aria-pressed={activeSection === "trash"}
+          onClick={() => setActiveSection("trash")}
+        >
+          <Trash2 size={15} />
+          <span>垃圾桶</span>
+          <strong>{sortedTrashedTasks.length}</strong>
+        </button>
+      </aside>
+
+      <section className="settings-content">
+        <header className="settings-content-header">
+          <div>
+            <p>{activeTitle}</p>
+            <span>{activeSubtitle}</span>
+          </div>
+          <button className="icon-button" title="关闭设置" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
+
+        {activeSection === "updates" ? (
+          <div className="update-panel-content">
+            <div className={`update-status update-status-${updateState.phase}`}>
+              <div className="update-version-grid">
+                <div>
+                  <span>当前版本</span>
+                  <strong>{updateState.currentVersion || "未知"}</strong>
+                </div>
+                <div>
+                  <span>最新版本</span>
+                  <strong>{updateState.latestVersion ?? "等待检查"}</strong>
+                </div>
+              </div>
+              <div className="update-message">
+                {updateState.phase === "error" ? (
+                  <AlertCircle size={14} />
+                ) : updateIsBusy ? (
+                  <Loader2 className="spin" size={14} />
+                ) : (
+                  <Check size={14} />
+                )}
+                <span>{updateMessage}</span>
+              </div>
+              {updateState.phase === "downloading" ? (
+                <div className="update-progress" aria-label={`下载进度 ${formatUpdatePercent(updateProgress)}`}>
+                  <div className="update-progress-bar" style={{ width: `${updateProgress}%` }} />
+                </div>
+              ) : null}
+            </div>
+            <button
+              className="primary-button update-action-button"
+              type="button"
+              disabled={isUpdateActionDisabled(updateState)}
+              onClick={() => void handleUpdateAction()}
+            >
+              {updateIsBusy ? (
+                <Loader2 className="spin" size={16} />
+              ) : updateState.phase === "downloaded" ? (
+                <Download size={16} />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              {getUpdateActionLabel(updateState)}
+            </button>
+            <p className="muted-text update-footnote">通过 GitHub Releases 获取安装包。旧 portable 版需要先手动安装一次新版安装包。</p>
+          </div>
+        ) : sortedTrashedTasks.length === 0 ? (
+          <div className="trash-empty">14 天内没有移入垃圾桶的任务</div>
+        ) : (
+          <div className="trash-list">
+            {sortedTrashedTasks.map((task) => {
+              const daysLeft = getTrashDaysLeft(task);
+              return (
+                <article key={task.id} className="trash-item">
+                  <button className="trash-item-main" type="button" title="打开任务详情" onClick={() => void onOpenTask(task)}>
+                    <h3>{task.title}</h3>
+                    <p>移入时间 {formatTrashDate(task.trashedAt)}</p>
+                  </button>
+                  <button
+                    className="trash-restore-button"
+                    type="button"
+                    title="恢复任务"
+                    aria-label={`恢复任务 ${task.title}`}
+                    onClick={() => void onRestoreTask(task)}
+                  >
+                    <span className="trash-restore-label trash-restore-label-expiry">
+                      {daysLeft > 0 ? `${daysLeft} 天后清除` : "即将清除"}
+                    </span>
+                    <span className="trash-restore-label trash-restore-label-action">恢复</span>
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function TaskApp({
   profile,
   state,
@@ -1722,6 +1946,7 @@ function TaskApp({
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
+  const [updateState, setUpdateState] = useState<AppUpdateState>(EMPTY_UPDATE_STATE);
   const [showMineOnly, setShowMineOnly] = useState(false);
   const [activeAssignmentTaskId, setActiveAssignmentTaskId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1815,6 +2040,19 @@ function TaskApp({
   }, []);
 
   useEffect(() => {
+    const cleanupUpdateState = window.coWorkApi.onUpdateState(setUpdateState);
+    void window.coWorkApi.getUpdateState().then(setUpdateState).catch((updateError) => {
+      setUpdateState((current) => ({
+        ...current,
+        phase: "error",
+        message: getReadableError(updateError, "读取更新状态失败。")
+      }));
+    });
+
+    return cleanupUpdateState;
+  }, []);
+
+  useEffect(() => {
     if (!taskMenu) {
       return;
     }
@@ -1859,6 +2097,33 @@ function TaskApp({
     } catch (copyError) {
       setAddressCopied(false);
       setError(copyError instanceof Error ? copyError.message : "复制主机地址失败。");
+    }
+  }
+
+  async function checkForUpdates() {
+    setError("");
+    try {
+      const nextUpdateState = await window.coWorkApi.checkForUpdates();
+      setUpdateState(nextUpdateState);
+    } catch (updateError) {
+      setUpdateState((current) => ({
+        ...current,
+        phase: "error",
+        message: getReadableError(updateError, "检查更新失败。")
+      }));
+    }
+  }
+
+  async function installUpdate() {
+    setError("");
+    try {
+      await window.coWorkApi.installUpdate();
+    } catch (updateError) {
+      setUpdateState((current) => ({
+        ...current,
+        phase: "error",
+        message: getReadableError(updateError, "安装更新失败。")
+      }));
     }
   }
 
@@ -2103,9 +2368,12 @@ function TaskApp({
         ) : null}
 
         {settingsOpen ? (
-          <SettingsPanel
+          <SettingsPanelWithUpdates
             trashedTasks={trashedTasks}
+            updateState={updateState}
             onClose={() => setSettingsOpen(false)}
+            onCheckForUpdates={checkForUpdates}
+            onInstallUpdate={installUpdate}
             onOpenTask={openTaskDetail}
             onRestoreTask={restoreTask}
           />
