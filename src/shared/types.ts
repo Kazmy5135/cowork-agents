@@ -3,6 +3,8 @@ export const MAX_TASK_SCREENSHOTS = 5;
 export const MAX_SCREENSHOT_EDGE = 1280;
 export const TRASH_RETENTION_DAYS = 14;
 export const ACCOUNT_ID_LENGTH = 11;
+export const DEFAULT_VERSION_NAME = "默认版本";
+export const MAX_VERSION_NAME_LENGTH = 24;
 
 export interface TaskScreenshot {
   id: string;
@@ -32,11 +34,26 @@ export interface AccountAuthResult {
   requiresProfileSetup: boolean;
 }
 
+export interface AppPreferences {
+  lastJoinAddress?: string;
+  lastAccountId?: string;
+}
+
+export interface TaskVersion {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  isDefault?: boolean;
+}
+
 export interface Task {
   id: string;
+  versionId: string;
   title: string;
   description?: string;
   screenshots?: TaskScreenshot[];
+  creatorId?: string;
   assigneeId?: string;
   completed: boolean;
   trashedAt?: string;
@@ -46,6 +63,8 @@ export interface Task {
 
 export interface HostData {
   users: UserProfile[];
+  versions: TaskVersion[];
+  currentVersionId: string;
   tasks: Task[];
 }
 
@@ -79,6 +98,27 @@ export type ClientToServerMessage =
       title: string;
     }
   | {
+      type: "version:create";
+      name: string;
+    }
+  | {
+      type: "version:rename";
+      versionId: string;
+      name: string;
+    }
+  | {
+      type: "version:delete";
+      versionId: string;
+    }
+  | {
+      type: "version:reorder";
+      versionIds: string[];
+    }
+  | {
+      type: "version:switch";
+      versionId: string;
+    }
+  | {
       type: "task:toggle";
       taskId: string;
       completed: boolean;
@@ -87,6 +127,11 @@ export type ClientToServerMessage =
       type: "task:assign";
       taskId: string;
       assigneeId: string;
+    }
+  | {
+      type: "task:moveVersion";
+      taskId: string;
+      versionId: string;
     }
   | {
       type: "task:trash";

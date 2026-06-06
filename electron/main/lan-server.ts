@@ -5,7 +5,9 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   ACCOUNT_ID_LENGTH,
   DEFAULT_PORT,
+  DEFAULT_VERSION_NAME,
   MAX_TASK_SCREENSHOTS,
+  MAX_VERSION_NAME_LENGTH,
   TRASH_RETENTION_DAYS,
   type ClientToServerMessage,
   type HostData,
@@ -13,6 +15,7 @@ import {
   type ServerToClientMessage,
   type Task,
   type TaskScreenshot,
+  type TaskVersion,
   type UserProfile
 } from "../../src/shared/types";
 import { HostDataStore } from "./data-store";
@@ -21,6 +24,7 @@ const ACCOUNT_ID_REGEX = new RegExp(`^\\d{${ACCOUNT_ID_LENGTH}}$`);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
 const TRASH_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_VERSION_ID = "default-version";
 
 function getLanAddresses(port: number): string[] {
   const interfaces = networkInterfaces();
@@ -62,6 +66,16 @@ function createRegisteredProfile(accountId: string): UserProfile {
   };
 }
 
+function createDefaultVersion(now = new Date().toISOString()): TaskVersion {
+  return {
+    id: DEFAULT_VERSION_ID,
+    name: DEFAULT_VERSION_NAME,
+    createdAt: now,
+    updatedAt: now,
+    isDefault: true
+  };
+}
+
 function validateAccountId(accountId: string): string {
   const cleanAccountId = accountId.trim();
   if (!ACCOUNT_ID_REGEX.test(cleanAccountId)) {
@@ -74,6 +88,8 @@ function validateAccountId(accountId: string): string {
 function cloneState(data: HostData): HostData {
   return {
     users: data.users.map((user) => ({ ...user })),
+    versions: data.versions.map((version) => ({ ...version })),
+    currentVersionId: data.currentVersionId,
     tasks: data.tasks.map((task) => ({
       ...task,
       screenshots: task.screenshots?.map((screenshot) => ({ ...screenshot }))
@@ -81,11 +97,66 @@ function cloneState(data: HostData): HostData {
   };
 }
 
-function normalizeTask(task: Task): Task {
+function normalizeVersion(version: TaskVersion, now: string, fallbackName: string): TaskVersion {
+  const id = typeof version.id === "string" && version.id.trim() ? version.id : randomUUID();
+  const name = typeof version.name === "string" && version.name.trim() ? version.name.trim().slice(0, MAX_VERSION_NAME_LENGTH) : fallbackName;
+  const createdAt = typeof version.createdAt === "string" && version.createdAt ? version.createdAt : now;
+
+  return {
+    id,
+    name,
+    createdAt,
+    updatedAt: typeof version.updatedAt === "string" && version.updatedAt ? version.updatedAt : createdAt,
+    isDefault: version.isDefault || undefined
+  };
+}
+
+function normalizeTask(task: Task, fallbackVersionId: string, validVersionIds: Set<string>): Task {
+  const versionId = validVersionIds.has(task.versionId) ? task.versionId : fallbackVersionId;
+
   return {
     ...task,
+    versionId,
     description: task.description ?? "",
     screenshots: task.screenshots ?? []
+  };
+}
+
+function normalizeHostData(data: HostData): HostData {
+  const now = new Date().toISOString();
+  const seenVersionIds = new Set<string>();
+  const versions = (Array.isArray(data.versions) ? data.versions : [])
+    .map((version, index) => normalizeVersion(version, now, index === 0 ? DEFAULT_VERSION_NAME : `版本 ${index + 1}`))
+    .map((version) => {
+      if (!seenVersionIds.has(version.id)) {
+        seenVersionIds.add(version.id);
+        return version;
+      }
+
+      const id = randomUUID();
+      seenVersionIds.add(id);
+      return { ...version, id };
+    });
+
+  if (versions.length === 0) {
+    versions.push(createDefaultVersion(now));
+  }
+
+  const defaultVersion = versions.find((version) => version.isDefault) ?? versions[0];
+  versions.forEach((version) => {
+    version.isDefault = version.id === defaultVersion.id || undefined;
+  });
+
+  const validVersionIds = new Set(versions.map((version) => version.id));
+  const fallbackVersionId = defaultVersion.id;
+  const currentVersionId = validVersionIds.has(data.currentVersionId) ? data.currentVersionId : fallbackVersionId;
+  const tasks = (Array.isArray(data.tasks) ? data.tasks : []).map((task) => normalizeTask(task, fallbackVersionId, validVersionIds));
+
+  return {
+    users: (Array.isArray(data.users) ? data.users : []).map(normalizeStoredUser),
+    versions,
+    currentVersionId,
+    tasks
   };
 }
 
@@ -125,8 +196,21 @@ function validateScreenshots(screenshots: TaskScreenshot[]): TaskScreenshot[] {
   });
 }
 
+function validateVersionName(name: string): string {
+  const cleanName = name.trim();
+  if (!cleanName) {
+    throw new Error("版本名称不能为空。");
+  }
+
+  if (cleanName.length > MAX_VERSION_NAME_LENGTH) {
+    throw new Error(`版本名称最多 ${MAX_VERSION_NAME_LENGTH} 个字。`);
+  }
+
+  return cleanName;
+}
+
 export class LanServer {
-  private data: HostData = { users: [], tasks: [] };
+  private data: HostData = { users: [], versions: [], currentVersionId: "", tasks: [] };
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
   private cleanupTimer: NodeJS.Timeout | null = null;
@@ -142,11 +226,8 @@ export class LanServer {
       return this.getHostInfo(port);
     }
 
-    this.data = await this.store.load();
-    this.data = {
-      users: this.data.users.map(normalizeStoredUser),
-      tasks: this.data.tasks.map(normalizeTask)
-    };
+    this.data = normalizeHostData(await this.store.load());
+    await this.store.save(this.data);
     await this.deleteExpiredTrashedTasks();
 
     this.httpServer = createServer((request, response) => {
@@ -283,10 +364,40 @@ export class LanServer {
         return;
       }
 
-      this.requireReadySession(socket);
+      const currentUser = this.requireReadySession(socket);
+
+      if (message.type === "version:create") {
+        await this.createVersion(message.name);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "version:rename") {
+        await this.renameVersion(message.versionId, message.name);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "version:delete") {
+        await this.deleteVersion(message.versionId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "version:reorder") {
+        await this.reorderVersions(message.versionIds);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "version:switch") {
+        await this.switchVersion(message.versionId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
 
       if (message.type === "task:create") {
-        await this.createTask(message.title);
+        await this.createTask(message.title, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
@@ -299,6 +410,12 @@ export class LanServer {
 
       if (message.type === "task:assign") {
         await this.assignTask(message.taskId, message.assigneeId);
+        this.broadcast({ type: "state:update", state: cloneState(this.data) });
+        return;
+      }
+
+      if (message.type === "task:moveVersion") {
+        await this.moveTaskToVersion(message.taskId, message.versionId);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
@@ -409,6 +526,121 @@ export class LanServer {
     this.broadcast({ type: "state:update", state });
   }
 
+  private findVersion(versionId: string): TaskVersion {
+    const version = this.data.versions.find((item) => item.id === versionId);
+    if (!version) {
+      throw new Error("版本不存在。");
+    }
+
+    return version;
+  }
+
+  private getDefaultVersion(): TaskVersion {
+    const defaultVersion = this.data.versions.find((version) => version.isDefault) ?? this.data.versions[0];
+    if (!defaultVersion) {
+      const now = new Date().toISOString();
+      const nextDefaultVersion = createDefaultVersion(now);
+      this.data.versions.push(nextDefaultVersion);
+      this.data.currentVersionId = nextDefaultVersion.id;
+      return nextDefaultVersion;
+    }
+
+    defaultVersion.isDefault = true;
+    return defaultVersion;
+  }
+
+  private getCurrentVersion(): TaskVersion {
+    const currentVersion = this.data.versions.find((version) => version.id === this.data.currentVersionId);
+    if (currentVersion) {
+      return currentVersion;
+    }
+
+    const defaultVersion = this.getDefaultVersion();
+    this.data.currentVersionId = defaultVersion.id;
+    return defaultVersion;
+  }
+
+  private async createVersion(name: string): Promise<void> {
+    const cleanName = validateVersionName(name);
+    const now = new Date().toISOString();
+
+    const version: TaskVersion = {
+      id: randomUUID(),
+      name: cleanName,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.data.versions.push(version);
+    this.data.currentVersionId = version.id;
+    await this.store.save(this.data);
+  }
+
+  private async renameVersion(versionId: string, name: string): Promise<void> {
+    const version = this.findVersion(versionId);
+    version.name = validateVersionName(name);
+    version.updatedAt = new Date().toISOString();
+    await this.store.save(this.data);
+  }
+
+  private async deleteVersion(versionId: string): Promise<void> {
+    const version = this.findVersion(versionId);
+    if (this.data.versions.length <= 1) {
+      throw new Error("至少需要保留一个版本。");
+    }
+
+    if (version.isDefault) {
+      throw new Error("默认版本不能删除。");
+    }
+
+    const defaultVersion = this.getDefaultVersion();
+    const now = new Date().toISOString();
+    this.data.tasks.forEach((task) => {
+      if (task.versionId === version.id) {
+        task.versionId = defaultVersion.id;
+        task.updatedAt = now;
+      }
+    });
+    this.data.versions = this.data.versions.filter((item) => item.id !== version.id);
+
+    if (this.data.currentVersionId === version.id) {
+      this.data.currentVersionId = defaultVersion.id;
+    }
+
+    await this.store.save(this.data);
+  }
+
+  private async reorderVersions(versionIds: string[]): Promise<void> {
+    if (!Array.isArray(versionIds) || versionIds.length !== this.data.versions.length) {
+      throw new Error("版本排序数据无效。");
+    }
+
+    const versionsById = new Map(this.data.versions.map((version) => [version.id, version]));
+    const seenVersionIds = new Set<string>();
+    const nextVersions = versionIds.map((versionId) => {
+      if (seenVersionIds.has(versionId)) {
+        throw new Error("版本排序数据重复。");
+      }
+
+      const version = versionsById.get(versionId);
+      if (!version) {
+        throw new Error("版本排序数据无效。");
+      }
+
+      seenVersionIds.add(versionId);
+      return version;
+    });
+
+    this.data.versions = nextVersions;
+    await this.store.save(this.data);
+  }
+
+  private async switchVersion(versionId: string): Promise<void> {
+    const version = this.findVersion(versionId);
+    this.data.currentVersionId = version.id;
+    await this.store.save(this.data);
+  }
+
   private findActiveTask(taskId: string): Task {
     const task = this.data.tasks.find((item) => item.id === taskId && !item.trashedAt);
     if (!task) {
@@ -439,18 +671,22 @@ export class LanServer {
     return false;
   }
 
-  private async createTask(title: string): Promise<void> {
+  private async createTask(title: string, creatorId: string): Promise<void> {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
       throw new Error("任务标题不能为空。");
     }
 
     const now = new Date().toISOString();
+    const currentVersion = this.getCurrentVersion();
     const task: Task = {
       id: randomUUID(),
+      versionId: currentVersion.id,
       title: cleanTitle,
       description: "",
       screenshots: [],
+      creatorId,
+      assigneeId: creatorId,
       completed: false,
       createdAt: now,
       updatedAt: now
@@ -476,6 +712,19 @@ export class LanServer {
     }
 
     task.assigneeId = assigneeId;
+    task.updatedAt = new Date().toISOString();
+    await this.store.save(this.data);
+  }
+
+  private async moveTaskToVersion(taskId: string, versionId: string): Promise<void> {
+    const task = this.findActiveTask(taskId);
+    const version = this.findVersion(versionId);
+
+    if (task.versionId === version.id) {
+      return;
+    }
+
+    task.versionId = version.id;
     task.updatedAt = new Date().toISOString();
     await this.store.save(this.data);
   }

@@ -1,8 +1,18 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
-import type { AccountAuthResult, ConnectionStatus, HostData, HostInfo, ProfileUpdateRequest, TaskScreenshot, UserProfile } from "../src/shared/types";
+import { contextBridge, ipcRenderer } from "electron";
+import type {
+  AccountAuthResult,
+  AppPreferences,
+  ConnectionStatus,
+  HostData,
+  HostInfo,
+  ProfileUpdateRequest,
+  TaskScreenshot,
+  UserProfile
+} from "../src/shared/types";
 
 contextBridge.exposeInMainWorld("coWorkApi", {
   getState: () => ipcRenderer.invoke("state:get") as Promise<HostData>,
+  getPreferences: () => ipcRenderer.invoke("preferences:get") as Promise<AppPreferences>,
   getLanAddresses: () => ipcRenderer.invoke("network:addresses") as Promise<string[]>,
   startHost: () => ipcRenderer.invoke("host:start") as Promise<HostInfo>,
   stopHost: () => ipcRenderer.invoke("host:stop") as Promise<void>,
@@ -13,10 +23,18 @@ contextBridge.exposeInMainWorld("coWorkApi", {
     ipcRenderer.invoke("account:update-profile", profile) as Promise<UserProfile>,
   disconnect: () => ipcRenderer.invoke("client:disconnect") as Promise<void>,
   createTask: (title: string) => ipcRenderer.invoke("task:create", title) as Promise<void>,
+  createVersion: (name: string) => ipcRenderer.invoke("version:create", name) as Promise<void>,
+  renameVersion: (versionId: string, name: string) =>
+    ipcRenderer.invoke("version:rename", versionId, name) as Promise<void>,
+  deleteVersion: (versionId: string) => ipcRenderer.invoke("version:delete", versionId) as Promise<void>,
+  reorderVersions: (versionIds: string[]) => ipcRenderer.invoke("version:reorder", versionIds) as Promise<void>,
+  switchVersion: (versionId: string) => ipcRenderer.invoke("version:switch", versionId) as Promise<void>,
   toggleTask: (taskId: string, completed: boolean) =>
     ipcRenderer.invoke("task:toggle", taskId, completed) as Promise<void>,
   assignTask: (taskId: string, assigneeId: string) =>
     ipcRenderer.invoke("task:assign", taskId, assigneeId) as Promise<void>,
+  moveTaskToVersion: (taskId: string, versionId: string) =>
+    ipcRenderer.invoke("task:move-version", taskId, versionId) as Promise<void>,
   moveTaskToTrash: (taskId: string) => ipcRenderer.invoke("task:trash", taskId) as Promise<void>,
   restoreTask: (taskId: string) => ipcRenderer.invoke("task:restore", taskId) as Promise<void>,
   updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) =>
@@ -26,13 +44,13 @@ contextBridge.exposeInMainWorld("coWorkApi", {
   restoreWindow: () => ipcRenderer.invoke("window:restore") as Promise<void>,
   moveCompactWindowBy: (deltaX: number, deltaY: number) =>
     ipcRenderer.invoke("window:move-compact-by", deltaX, deltaY) as Promise<void>,
+  resizeMainWindowY: (edge: "top" | "bottom", deltaY: number) =>
+    ipcRenderer.invoke("window:resize-main-y", edge, deltaY) as Promise<void>,
+  resetMainWindowSize: () => ipcRenderer.invoke("window:reset-main-size") as Promise<void>,
   closeWindow: () => ipcRenderer.invoke("window:close") as Promise<void>,
   setAlwaysOnTop: (enabled: boolean) =>
     ipcRenderer.invoke("window:set-always-on-top", enabled) as Promise<boolean>,
-  copyText: (text: string) => {
-    clipboard.writeText(text);
-    return Promise.resolve();
-  },
+  copyText: (text: string) => ipcRenderer.invoke("clipboard:write-text", text) as Promise<void>,
   onState: (callback: (state: HostData) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: HostData) => callback(state);
     ipcRenderer.on("state:update", handler);

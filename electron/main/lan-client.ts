@@ -146,12 +146,36 @@ export class LanClient {
     this.send({ type: "task:create", title });
   }
 
+  createVersion(name: string): void {
+    this.send({ type: "version:create", name });
+  }
+
+  renameVersion(versionId: string, name: string): void {
+    this.send({ type: "version:rename", versionId, name });
+  }
+
+  deleteVersion(versionId: string): void {
+    this.send({ type: "version:delete", versionId });
+  }
+
+  reorderVersions(versionIds: string[]): void {
+    this.send({ type: "version:reorder", versionIds });
+  }
+
+  switchVersion(versionId: string): void {
+    this.send({ type: "version:switch", versionId });
+  }
+
   toggleTask(taskId: string, completed: boolean): void {
     this.send({ type: "task:toggle", taskId, completed });
   }
 
   assignTask(taskId: string, assigneeId: string): void {
     this.send({ type: "task:assign", taskId, assigneeId });
+  }
+
+  moveTaskToVersion(taskId: string, versionId: string): void {
+    this.send({ type: "task:moveVersion", taskId, versionId });
   }
 
   moveTaskToTrash(taskId: string): void {

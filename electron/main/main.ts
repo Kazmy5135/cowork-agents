@@ -1,14 +1,15 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
 import { join } from "node:path";
 import {
   DEFAULT_PORT,
+  type AppPreferences,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
   type ProfileUpdateRequest,
   type TaskScreenshot
 } from "../../src/shared/types";
-import { HostDataStore } from "./data-store";
+import { AppPreferencesStore, HostDataStore } from "./data-store";
 import { LanClient } from "./lan-client";
 import { LanServer, listLanUrls } from "./lan-server";
 
@@ -19,10 +20,11 @@ let lastMainWindowBounds: { x: number; y: number; width: number; height: number 
 let isMainWindowCompact = false;
 let isQuitting = false;
 let hostStore: HostDataStore;
+let preferencesStore: AppPreferencesStore;
 let lanServer: LanServer | null = null;
 let lanClient: LanClient | null = null;
 let currentHostInfo: HostInfo | null = null;
-let latestState: HostData = { users: [], tasks: [] };
+let latestState: HostData = { users: [], versions: [], currentVersionId: "", tasks: [] };
 const detailWindows = new Map<string, BrowserWindow>();
 const trayIconBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACwElEQVR4nL3XYUsUURQG4PcH7Mf34/yk+SvztSgaKlpUFAcVxURRVDRNTbM1s8zcTFPTdFUURcVBRVFUNiqKohM37uC0zaxjO7v367L77Mw995z3gjcEvPkLvPUTvP0DvPMdtL+Bd7+C976A9z+DDz6BySxYdgGWnxusODNZeWqx6sRm9bFN58hizaHJ2gODdftgvQs27IGNu+DDHbBpG2zeAls2wdYNsG0dbF8DO1YRFTdYdmGz/DzDijNh5amw6kRYfSx0joQ1h8LaA2HdvrDezbBhz2bjrnEVzs4VXIUnmMw6LLsQlp9LBFzYsCds3BU+3BE2bTts3kqE4exaRj7cZDLrFoALm7eELZsuWzfMIJzdSwjDLSazEgMubN0Qtq0L29esXJw9iygVLuxYFXauWH6cvQsIeu3FwoVdy8LuJdPD2TeP3IKLY8/z4cKeRZe9CwmFs38O/qNWSLVHxYW9C8K+eUfhHJiF/5yXChf2zwkHZg0OzsDrcHaJceHgjM2haXjtNUqHixMXDk1nODwFr7cXDc9dGhcOTwmfvTWgB0tJ8D9/4BIXptIm9FSLFc+3fLjw+RsLeqQG4v98uQA858kVLhydsKHneeCTh/5YPLhwbNyGDhOBr/2q5eGhn/9dcLm48OUrCzrJ5N3z/1kRcOH4mAkdoyIVXMy48PULAzrDZa5T7aHwZZOJgmc4MQovQNqFHrVr4sKJUZuTI/DSqxFTe42KCydHDKZT8Ednp4S4o3BODcOf2xM6QBYbd5lOJRTOd0+Rm9vNIuPCdMr0cE4PIejSYBURt/w43z9B2I3FKgXO2QGE3lh0enVj2nMzCOd8H8JwL7cndIAspNoTYTg/PEY+HF501gHS1jEqSoezvXOeD+diD6LgUOlVBUiV4VSMUklGhQk1z9VIVVNNDRbV21V7VR0uCs6Pj/AbBPOQwE6+/N8AAAAASUVORK5CYII=";
@@ -34,6 +36,7 @@ const COMPACT_WINDOW_SIZE = {
   width: 72,
   height: 87
 };
+type MainWindowResizeEdge = "top" | "bottom";
 
 function emitState(state: HostData): void {
   latestState = state;
@@ -55,6 +58,24 @@ function getClient(): LanClient {
   }
 
   return lanClient;
+}
+
+function formatJoinAddressForInput(address: string): string {
+  const trimmed = address.trim();
+
+  try {
+    return new URL(trimmed).host || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+async function rememberPreferences(preferences: Partial<AppPreferences>): Promise<void> {
+  try {
+    await preferencesStore.patch(preferences);
+  } catch {
+    // Remembering convenience inputs should never block connection or login.
+  }
 }
 
 function loadRenderer(targetWindow: BrowserWindow, query?: Record<string, string>): void {
@@ -169,6 +190,73 @@ function restoreMainWindowBounds(): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max));
+}
+
+function clampWindowAxis(value: number, min: number, max: number): number {
+  return max <= min ? min : clamp(value, min, max);
+}
+
+function rememberMainWindowBoundsFrom(bounds: { x: number; y: number; width: number; height: number }): void {
+  if (!isMainWindowCompact) {
+    lastMainWindowBounds = bounds;
+  }
+}
+
+function resetMainWindowSize(): void {
+  if (!mainWindow || mainWindow.isDestroyed() || isMainWindowCompact) {
+    return;
+  }
+
+  const bounds = mainWindow.getBounds();
+  const workArea = screen.getDisplayMatching(bounds).workArea;
+  const width = MAIN_WINDOW_SIZE.width;
+  const height = Math.min(MAIN_WINDOW_SIZE.height, workArea.height);
+  const nextBounds = {
+    width,
+    height,
+    x: clampWindowAxis(bounds.x, workArea.x, workArea.x + workArea.width - width),
+    y: clampWindowAxis(bounds.y, workArea.y, workArea.y + workArea.height - height)
+  };
+
+  mainWindow.setBounds(nextBounds, false);
+  rememberMainWindowBoundsFrom(nextBounds);
+}
+
+function resizeMainWindowY(edge: MainWindowResizeEdge, deltaY: number): void {
+  if (!mainWindow || mainWindow.isDestroyed() || isMainWindowCompact) {
+    return;
+  }
+
+  const roundedDeltaY = Math.round(deltaY);
+  if (roundedDeltaY === 0) {
+    return;
+  }
+
+  const bounds = mainWindow.getBounds();
+  const workArea = screen.getDisplayMatching(bounds).workArea;
+  const width = MAIN_WINDOW_SIZE.width;
+  const minHeight = Math.min(MAIN_WINDOW_SIZE.height, workArea.height);
+  let nextY = bounds.y;
+  let nextHeight = bounds.height;
+
+  if (edge === "top") {
+    const currentBottom = clampWindowAxis(bounds.y + bounds.height, workArea.y + minHeight, workArea.y + workArea.height);
+    nextY = clampWindowAxis(bounds.y + roundedDeltaY, workArea.y, currentBottom - minHeight);
+    nextHeight = currentBottom - nextY;
+  } else {
+    nextY = clampWindowAxis(bounds.y, workArea.y, workArea.y + workArea.height - minHeight);
+    nextHeight = clampWindowAxis(bounds.height + roundedDeltaY, minHeight, workArea.y + workArea.height - nextY);
+  }
+
+  const nextBounds = {
+    width,
+    height: nextHeight,
+    x: clampWindowAxis(bounds.x, workArea.x, workArea.x + workArea.width - width),
+    y: nextY
+  };
+
+  mainWindow.setBounds(nextBounds, false);
+  rememberMainWindowBoundsFrom(nextBounds);
 }
 
 function getCompactBounds(normalBounds: { x: number; y: number; width: number; height: number }) {
@@ -358,7 +446,13 @@ function createWindow(): void {
 function registerIpc(): void {
   ipcMain.handle("state:get", () => latestState);
 
+  ipcMain.handle("preferences:get", () => preferencesStore.load());
+
   ipcMain.handle("network:addresses", () => listLanUrls(DEFAULT_PORT));
+
+  ipcMain.handle("clipboard:write-text", (_event, text: string) => {
+    clipboard.writeText(text);
+  });
 
   ipcMain.handle("host:start", async () => {
     if (!lanServer) {
@@ -381,15 +475,20 @@ function registerIpc(): void {
 
   ipcMain.handle("client:join", async (_event, address: string) => {
     const connectedUrl = await getClient().connect(address);
+    await rememberPreferences({ lastJoinAddress: formatJoinAddressForInput(connectedUrl) });
     return connectedUrl;
   });
 
-  ipcMain.handle("account:login", (_event, accountId: string) => {
-    return getClient().loginAccount(accountId);
+  ipcMain.handle("account:login", async (_event, accountId: string) => {
+    const result = await getClient().loginAccount(accountId);
+    await rememberPreferences({ lastAccountId: result.profile.id });
+    return result;
   });
 
-  ipcMain.handle("account:register", (_event, accountId: string) => {
-    return getClient().registerAccount(accountId);
+  ipcMain.handle("account:register", async (_event, accountId: string) => {
+    const result = await getClient().registerAccount(accountId);
+    await rememberPreferences({ lastAccountId: result.profile.id });
+    return result;
   });
 
   ipcMain.handle("account:update-profile", (_event, profile: ProfileUpdateRequest) => {
@@ -404,12 +503,36 @@ function registerIpc(): void {
     getClient().createTask(title);
   });
 
+  ipcMain.handle("version:create", (_event, name: string) => {
+    getClient().createVersion(name);
+  });
+
+  ipcMain.handle("version:rename", (_event, versionId: string, name: string) => {
+    getClient().renameVersion(versionId, name);
+  });
+
+  ipcMain.handle("version:delete", (_event, versionId: string) => {
+    getClient().deleteVersion(versionId);
+  });
+
+  ipcMain.handle("version:reorder", (_event, versionIds: string[]) => {
+    getClient().reorderVersions(versionIds);
+  });
+
+  ipcMain.handle("version:switch", (_event, versionId: string) => {
+    getClient().switchVersion(versionId);
+  });
+
   ipcMain.handle("task:toggle", (_event, taskId: string, completed: boolean) => {
     getClient().toggleTask(taskId, completed);
   });
 
   ipcMain.handle("task:assign", (_event, taskId: string, assigneeId: string) => {
     getClient().assignTask(taskId, assigneeId);
+  });
+
+  ipcMain.handle("task:move-version", (_event, taskId: string, versionId: string) => {
+    getClient().moveTaskToVersion(taskId, versionId);
   });
 
   ipcMain.handle("task:trash", (_event, taskId: string) => {
@@ -449,6 +572,24 @@ function registerIpc(): void {
   ipcMain.handle("window:move-compact-by", (_event, deltaX: number, deltaY: number) => {
     moveMainCompactWindowBy(deltaX, deltaY);
   });
+  ipcMain.handle("window:resize-main-y", (event, edge: MainWindowResizeEdge, deltaY: number) => {
+    if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) {
+      return;
+    }
+
+    if (edge !== "top" && edge !== "bottom") {
+      return;
+    }
+
+    resizeMainWindowY(edge, deltaY);
+  });
+  ipcMain.handle("window:reset-main-size", (event) => {
+    if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) {
+      return;
+    }
+
+    resetMainWindowSize();
+  });
   ipcMain.handle("window:close", (event) => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender);
     if (targetWindow === mainWindow) {
@@ -468,6 +609,7 @@ app.whenReady().then(async () => {
   app.setAppUserModelId("com.projectmoga.coworkagentslan");
   await loadAppIcon();
   hostStore = new HostDataStore(app.getPath("userData"));
+  preferencesStore = new AppPreferencesStore(app.getPath("userData"));
   registerIpc();
   createTray();
   createWindow();

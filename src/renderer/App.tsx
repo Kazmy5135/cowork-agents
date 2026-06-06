@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Check,
+  ChevronRight,
   Circle,
   Clipboard,
+  GripVertical,
   Image as ImageIcon,
+  Layers,
   LogIn,
   Loader2,
+  Pencil,
   Pin,
   PinOff,
   Plus,
@@ -24,25 +29,33 @@ import {
 } from "lucide-react";
 import {
   ACCOUNT_ID_LENGTH,
+  MAX_VERSION_NAME_LENGTH,
   MAX_SCREENSHOT_EDGE,
   MAX_TASK_SCREENSHOTS,
   TRASH_RETENTION_DAYS,
   type AccountAuthResult,
+  type AppPreferences,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
   type Task,
   type TaskScreenshot,
+  type TaskVersion,
   type UserProfile
 } from "../shared/types";
 
 const EMPTY_STATE: HostData = {
   users: [],
+  versions: [],
+  currentVersionId: "",
   tasks: []
 };
 const ACCOUNT_ID_REGEX = new RegExp(`^\\d{${ACCOUNT_ID_LENGTH}}$`);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
+const VERSION_REORDER_BUSY_ID = "__version-reorder__";
+const VERSION_REORDER_FORWARD_THRESHOLD = 0.3;
+const VERSION_REORDER_BACKWARD_THRESHOLD = 0.7;
 const trashDateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -65,12 +78,26 @@ function normalizeAccountInput(value: string): string {
   return value.replace(/\D/g, "").slice(0, ACCOUNT_ID_LENGTH);
 }
 
+function formatJoinAddressForInput(address: string): string {
+  const trimmed = address.trim();
+
+  try {
+    return new URL(trimmed).host || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 function getAccountError(accountId: string): string {
   return ACCOUNT_ID_REGEX.test(accountId) ? "" : `请输入 ${ACCOUNT_ID_LENGTH} 位数字账号。`;
 }
 
 function getUserDisplayName(user?: UserProfile): string {
   return user?.name.trim() || user?.id || "未分配";
+}
+
+function getTaskPersonDisplayName(user: UserProfile | undefined, userId: string | undefined, emptyLabel: string): string {
+  return user ? getUserDisplayName(user) : userId || emptyLabel;
 }
 
 function isUserProfileComplete(user: UserProfile): boolean {
@@ -171,6 +198,19 @@ function countCompactTaskChanges(tasks: Task[], snapshot: Map<string, CompactTas
 
 function formatBadgeCount(count: number): string {
   return count > 99 ? "99+" : String(count);
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function getCurrentVersion(state: HostData): TaskVersion | undefined {
+  return state.versions.find((version) => version.id === state.currentVersionId) ?? state.versions[0];
+}
+
+function getCurrentVersionTasks(state: HostData): Task[] {
+  const currentVersion = getCurrentVersion(state);
+  return currentVersion ? state.tasks.filter((task) => task.versionId === currentVersion.id) : state.tasks;
 }
 
 function getDetailRoute(): { isDetail: boolean; taskId: string | null } {
@@ -338,6 +378,64 @@ function CompactIcon({
   );
 }
 
+function MainWindowResizeHandle({ edge }: { edge: "top" | "bottom" }) {
+  const dragState = useRef<{
+    pointerId: number;
+    lastY: number;
+  } | null>(null);
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragState.current = {
+      pointerId: event.pointerId,
+      lastY: event.screenY
+    };
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const currentDrag = dragState.current;
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaY = event.screenY - currentDrag.lastY;
+    currentDrag.lastY = event.screenY;
+
+    if (deltaY !== 0) {
+      void window.coWorkApi.resizeMainWindowY(edge, deltaY);
+    }
+  }
+
+  function finishPointerGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    const currentDrag = dragState.current;
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    dragState.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  return (
+    <div
+      className={`main-resize-handle main-resize-handle-${edge}`}
+      aria-hidden="true"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishPointerGesture}
+      onPointerCancel={finishPointerGesture}
+    />
+  );
+}
+
 function WindowControls({
   pinned,
   onTogglePin,
@@ -487,18 +585,37 @@ function ConnectView({
   status,
   hostInfo,
   lanUrls,
+  initialJoinAddress,
   onConnected,
+  onJoined,
   onMinimize
 }: {
   status: ConnectionStatus;
   hostInfo: HostInfo | null;
   lanUrls: string[];
+  initialJoinAddress: string;
   onConnected: () => void;
+  onJoined: (address: string) => void;
   onMinimize: () => void;
 }) {
-  const [joinAddress, setJoinAddress] = useState("");
+  const [joinAddress, setJoinAddress] = useState(initialJoinAddress);
   const [busy, setBusy] = useState<"host" | "join" | null>(null);
   const [error, setError] = useState("");
+  const [addressCopied, setAddressCopied] = useState(false);
+  const copyFeedbackTimer = useRef<number | null>(null);
+  const localJoinAddress = formatJoinAddressForInput(hostInfo?.url ?? lanUrls[0] ?? "");
+
+  useEffect(() => {
+    setJoinAddress(initialJoinAddress);
+  }, [initialJoinAddress]);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimer.current !== null) {
+        window.clearTimeout(copyFeedbackTimer.current);
+      }
+    };
+  }, []);
 
   async function startHost() {
     setBusy("host");
@@ -517,12 +634,37 @@ function ConnectView({
     setBusy("join");
     setError("");
     try {
-      await window.coWorkApi.joinHost(joinAddress);
+      const connectedAddress = await window.coWorkApi.joinHost(joinAddress);
+      onJoined(formatJoinAddressForInput(connectedAddress));
       onConnected();
     } catch (joinError) {
       setError(joinError instanceof Error ? joinError.message : "连接失败。");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function copyLocalAddress() {
+    if (!localJoinAddress) {
+      return;
+    }
+
+    setError("");
+    try {
+      await window.coWorkApi.copyText(localJoinAddress);
+      setAddressCopied(true);
+
+      if (copyFeedbackTimer.current !== null) {
+        window.clearTimeout(copyFeedbackTimer.current);
+      }
+
+      copyFeedbackTimer.current = window.setTimeout(() => {
+        setAddressCopied(false);
+        copyFeedbackTimer.current = null;
+      }, 1400);
+    } catch (copyError) {
+      setAddressCopied(false);
+      setError(copyError instanceof Error ? copyError.message : "复制本机 IP 失败。");
     }
   }
 
@@ -532,31 +674,50 @@ function ConnectView({
         <span>协作任务</span>
         <WindowControls pinned={true} onTogglePin={() => undefined} onMinimize={onMinimize} />
       </div>
-      <section className="connect-grid">
-        <button className="connect-action" disabled={busy !== null} onClick={() => void startHost()}>
-          {busy === "host" ? <Loader2 className="spin" size={18} /> : <Server size={18} />}
-          作为主机启动
-        </button>
-        <div className="join-box">
-          <div className="join-input-row">
+      <section className="connect-layout">
+        <div className="host-start-section">
+          <button className="connect-action host-start-button" disabled={busy !== null} onClick={() => void startHost()}>
+            {busy === "host" ? <Loader2 className="spin" size={18} /> : <Server size={18} />}
+            作为主机启动
+          </button>
+        </div>
+        <div className="client-connect-section">
+          <div className="client-connect-header">
+            <span>连接服务器（作为客户端）</span>
+            <small>{localJoinAddress ? `本机：${localJoinAddress}` : "未找到本机 IP"}</small>
+          </div>
+          <div className="join-input-row client-join-row">
             <input
+              aria-label="服务器地址"
               value={joinAddress}
               placeholder="192.168.1.20:48731"
-              onChange={(event) => setJoinAddress(event.target.value)}
+              onChange={(event) => {
+                setJoinAddress(event.target.value);
+                setError("");
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   void joinHost();
                 }
               }}
             />
-            <button className="icon-button solid" disabled={busy !== null} title="加入主机" onClick={() => void joinHost()}>
+            <button className="primary-button join-button" disabled={busy !== null} onClick={() => void joinHost()}>
               {busy === "join" ? <Loader2 className="spin" size={15} /> : <Wifi size={15} />}
+              连接
+            </button>
+            <button
+              className="secondary-button copy-local-ip-button"
+              disabled={!localJoinAddress}
+              title={localJoinAddress ? `复制本机 IP：${localJoinAddress}` : "未找到本机 IP"}
+              onClick={() => void copyLocalAddress()}
+            >
+              {addressCopied ? <Check size={15} /> : <Clipboard size={15} />}
+              {addressCopied ? "已复制" : "复制本机 IP"}
             </button>
           </div>
-          <p className="muted-text">{hostInfo?.url ?? lanUrls[0] ?? "等待局域网地址"}</p>
         </div>
       </section>
-      <div className="status-line">
+      <div className="status-line connect-status-line">
         {error || status.phase === "error" ? <AlertCircle size={14} /> : <Wifi size={14} />}
         <span>{error || status.message || "未连接"}</span>
       </div>
@@ -566,14 +727,16 @@ function ConnectView({
 
 function AccountView({
   status,
+  initialAccountId,
   onAuthenticated,
   onMinimize
 }: {
   status: ConnectionStatus;
+  initialAccountId: string;
   onAuthenticated: (result: AccountAuthResult) => void;
   onMinimize: () => void;
 }) {
-  const [accountId, setAccountId] = useState("");
+  const [accountId, setAccountId] = useState(normalizeAccountInput(initialAccountId));
   const [busy, setBusy] = useState<"login" | "register" | null>(null);
   const [error, setError] = useState("");
 
@@ -680,13 +843,21 @@ function TaskRow({
 
 function TaskContextMenu({
   task,
+  versions,
   x,
   y,
+  submenuX,
+  submenuY,
+  onMoveToVersion,
   onMoveToTrash
 }: {
   task: Task;
+  versions: TaskVersion[];
   x: number;
   y: number;
+  submenuX: "left" | "right";
+  submenuY: "down" | "up";
+  onMoveToVersion: (task: Task, versionId: string) => Promise<void>;
   onMoveToTrash: (task: Task) => Promise<void>;
 }) {
   return (
@@ -699,9 +870,37 @@ function TaskContextMenu({
         onContextMenu={(event) => event.preventDefault()}
         onPointerDown={(event) => event.stopPropagation()}
       >
-        <button className="task-menu-item danger" role="menuitem" onClick={() => void onMoveToTrash(task)}>
+        <div className="task-menu-group">
+          <button className="task-menu-item" role="menuitem" aria-haspopup="menu" type="button">
+            <Layers size={14} />
+            <span>移动</span>
+            <ChevronRight className="task-menu-caret" size={14} />
+          </button>
+          <div className={`task-version-submenu ${submenuX} ${submenuY}`} role="menu" aria-label="移动到版本">
+            {versions.map((version) => {
+              const isCurrentTaskVersion = version.id === task.versionId;
+
+              return (
+                <button
+                  key={version.id}
+                  className={`task-menu-item task-version-item ${isCurrentTaskVersion ? "current" : ""}`}
+                  role="menuitem"
+                  type="button"
+                  disabled={isCurrentTaskVersion}
+                  title={version.name}
+                  onClick={() => void onMoveToVersion(task, version.id)}
+                >
+                  <Layers size={13} />
+                  <span>{version.name}</span>
+                  {isCurrentTaskVersion ? <span className="task-version-current">当前</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <button className="task-menu-item danger" role="menuitem" type="button" onClick={() => void onMoveToTrash(task)}>
           <Trash2 size={14} />
-          移动到垃圾桶
+          删除
         </button>
       </div>
     </div>
@@ -737,6 +936,691 @@ function AssignmentPopover({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function VersionPopover({
+  versions,
+  currentVersionId,
+  taskCountsByVersion,
+  onClose,
+  onCreateVersion,
+  onRenameVersion,
+  onDeleteVersion,
+  onReorderVersions,
+  onSwitchVersion
+}: {
+  versions: TaskVersion[];
+  currentVersionId: string;
+  taskCountsByVersion: Map<string, number>;
+  onClose: () => void;
+  onCreateVersion: (name: string) => Promise<void>;
+  onRenameVersion: (versionId: string, name: string) => Promise<void>;
+  onDeleteVersion: (versionId: string) => Promise<void>;
+  onReorderVersions: (versionIds: string[]) => Promise<void>;
+  onSwitchVersion: (versionId: string) => Promise<void>;
+}) {
+  const [newVersionName, setNewVersionName] = useState("");
+  const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [confirmingDeleteVersionId, setConfirmingDeleteVersionId] = useState<string | null>(null);
+  const [busyVersionId, setBusyVersionId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [versionError, setVersionError] = useState("");
+  const [orderedVersionIds, setOrderedVersionIds] = useState<string[]>(() => versions.map((version) => version.id));
+  const [dragPreview, setDragPreview] = useState<{
+    versionId: string;
+    width: number;
+    height: number;
+  } | null>(null);
+  const dragPreviewRef = useRef<HTMLDivElement | null>(null);
+  const dragPreviewPositionRef = useRef({ left: 0, top: 0 });
+  const dragPreviewFrameRef = useRef<number | null>(null);
+  const dragListenerCleanupRef = useRef<(() => void) | null>(null);
+  const versionItemRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const versionIdsRef = useRef<string[]>(versions.map((version) => version.id));
+  const orderedVersionIdsRef = useRef<string[]>(orderedVersionIds);
+  const suppressNextSwitchRef = useRef(false);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    versionId: string;
+    sourceElement: HTMLButtonElement;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    lastCenterY: number;
+    initialOrder: string[];
+  } | null>(null);
+  const orderBusy = busyVersionId === VERSION_REORDER_BUSY_ID;
+  const draggingVersionId = dragPreview?.versionId ?? null;
+  const orderedVersions = useMemo(() => {
+    const versionsById = new Map(versions.map((version) => [version.id, version]));
+    const nextVersions: TaskVersion[] = [];
+    orderedVersionIds.forEach((versionId) => {
+      const version = versionsById.get(versionId);
+      if (version) {
+        nextVersions.push(version);
+      }
+    });
+
+    const orderedIds = new Set(nextVersions.map((version) => version.id));
+    versions.forEach((version) => {
+      if (!orderedIds.has(version.id)) {
+        nextVersions.push(version);
+      }
+    });
+
+    return nextVersions;
+  }, [orderedVersionIds, versions]);
+
+  useEffect(() => {
+    orderedVersionIdsRef.current = orderedVersionIds;
+  }, [orderedVersionIds]);
+
+  useEffect(() => {
+    const nextVersionIds = versions.map((version) => version.id);
+    setConfirmingDeleteVersionId((current) => (current && !nextVersionIds.includes(current) ? null : current));
+
+    if (areStringArraysEqual(nextVersionIds, versionIdsRef.current)) {
+      return;
+    }
+
+    if (dragStateRef.current) {
+      clearActiveVersionDrag(false);
+    }
+
+    versionIdsRef.current = nextVersionIds;
+    orderedVersionIdsRef.current = nextVersionIds;
+    setOrderedVersionIds(nextVersionIds);
+  }, [versions]);
+
+  useEffect(() => {
+    return () => {
+      dragListenerCleanupRef.current?.();
+      dragListenerCleanupRef.current = null;
+
+      if (dragPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(dragPreviewFrameRef.current);
+        dragPreviewFrameRef.current = null;
+      }
+
+      const currentDrag = dragStateRef.current;
+      if (currentDrag) {
+        releaseVersionDragPointer(currentDrag);
+      }
+
+      dragStateRef.current = null;
+    };
+  }, []);
+
+  function cleanVersionName(rawName: string): string | null {
+    const cleanName = rawName.trim();
+    if (!cleanName) {
+      setVersionError("版本名称不能为空。");
+      return null;
+    }
+
+    if (cleanName.length > MAX_VERSION_NAME_LENGTH) {
+      setVersionError(`版本名称最多 ${MAX_VERSION_NAME_LENGTH} 个字。`);
+      return null;
+    }
+
+    return cleanName;
+  }
+
+  async function handleCreateVersion() {
+    const cleanName = cleanVersionName(newVersionName);
+    if (!cleanName) {
+      return;
+    }
+
+    setCreating(true);
+    setVersionError("");
+    setConfirmingDeleteVersionId(null);
+    try {
+      await onCreateVersion(cleanName);
+      setNewVersionName("");
+    } catch (createError) {
+      setVersionError(createError instanceof Error ? createError.message : "创建版本失败。");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleRenameVersion(versionId: string) {
+    const cleanName = cleanVersionName(editingName);
+    if (!cleanName) {
+      return;
+    }
+
+    setBusyVersionId(versionId);
+    setVersionError("");
+    try {
+      await onRenameVersion(versionId, cleanName);
+      setEditingVersionId(null);
+      setEditingName("");
+    } catch (renameError) {
+      setVersionError(renameError instanceof Error ? renameError.message : "重命名版本失败。");
+    } finally {
+      setBusyVersionId(null);
+    }
+  }
+
+  async function handleDeleteVersion(version: TaskVersion) {
+    if (version.isDefault || versions.length <= 1) {
+      return;
+    }
+
+    if (confirmingDeleteVersionId !== version.id) {
+      setConfirmingDeleteVersionId(version.id);
+      setVersionError("");
+      setEditingVersionId(null);
+      setEditingName("");
+      return;
+    }
+
+    setBusyVersionId(version.id);
+    setVersionError("");
+    try {
+      await onDeleteVersion(version.id);
+      setConfirmingDeleteVersionId(null);
+      if (editingVersionId === version.id) {
+        setEditingVersionId(null);
+        setEditingName("");
+      }
+    } catch (deleteError) {
+      setVersionError(deleteError instanceof Error ? deleteError.message : "删除版本失败。");
+    } finally {
+      setBusyVersionId(null);
+    }
+  }
+
+  async function handleSwitchVersion(version: TaskVersion) {
+    if (editingVersionId || draggingVersionId) {
+      return;
+    }
+
+    setConfirmingDeleteVersionId(null);
+    if (version.id === currentVersionId) {
+      onClose();
+      return;
+    }
+
+    setBusyVersionId(version.id);
+    setVersionError("");
+    try {
+      await onSwitchVersion(version.id);
+      onClose();
+    } catch (switchError) {
+      setVersionError(switchError instanceof Error ? switchError.message : "切换版本失败。");
+    } finally {
+      setBusyVersionId(null);
+    }
+  }
+
+  async function commitVersionOrder(versionIds: string[]) {
+    if (areStringArraysEqual(versionIds, versionIdsRef.current)) {
+      return;
+    }
+
+    setBusyVersionId(VERSION_REORDER_BUSY_ID);
+    setVersionError("");
+    try {
+      await onReorderVersions(versionIds);
+      versionIdsRef.current = versionIds;
+    } catch (reorderError) {
+      setOrderedVersionIds(versionIdsRef.current);
+      orderedVersionIdsRef.current = versionIdsRef.current;
+      setVersionError(reorderError instanceof Error ? reorderError.message : "调整版本顺序失败。");
+    } finally {
+      setBusyVersionId(null);
+    }
+  }
+
+  function flushDragPreviewPosition() {
+    const previewNode = dragPreviewRef.current;
+    if (!previewNode) {
+      return;
+    }
+
+    const { left, top } = dragPreviewPositionRef.current;
+    previewNode.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+  }
+
+  function scheduleDragPreviewPosition(left: number, top: number) {
+    dragPreviewPositionRef.current = { left, top };
+
+    if (dragPreviewFrameRef.current !== null) {
+      return;
+    }
+
+    dragPreviewFrameRef.current = window.requestAnimationFrame(() => {
+      dragPreviewFrameRef.current = null;
+      flushDragPreviewPosition();
+    });
+  }
+
+  function releaseVersionDragPointer(currentDrag: NonNullable<typeof dragStateRef.current>) {
+    try {
+      if (currentDrag.sourceElement.hasPointerCapture(currentDrag.pointerId)) {
+        currentDrag.sourceElement.releasePointerCapture(currentDrag.pointerId);
+      }
+    } catch {
+      // The pointer can already be gone if Electron drops capture during a fast drag.
+    }
+  }
+
+  function removeVersionDragListeners() {
+    dragListenerCleanupRef.current?.();
+    dragListenerCleanupRef.current = null;
+  }
+
+  function clearDragPreviewFrame() {
+    if (dragPreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragPreviewFrameRef.current);
+      dragPreviewFrameRef.current = null;
+    }
+  }
+
+  function clearActiveVersionDrag(restoreInitialOrder: boolean) {
+    const currentDrag = dragStateRef.current;
+    if (!currentDrag) {
+      return;
+    }
+
+    dragStateRef.current = null;
+    removeVersionDragListeners();
+    releaseVersionDragPointer(currentDrag);
+    clearDragPreviewFrame();
+    setDragPreview(null);
+    suppressNextSwitchRef.current = false;
+
+    if (restoreInitialOrder) {
+      orderedVersionIdsRef.current = currentDrag.initialOrder;
+      setOrderedVersionIds(currentDrag.initialOrder);
+    }
+  }
+
+  function moveDraggingVersion(pointerY: number) {
+    const currentDrag = dragStateRef.current;
+    if (!currentDrag) {
+      return;
+    }
+
+    const dragCenterY = pointerY - currentDrag.offsetY + currentDrag.height / 2;
+    const thresholdRatio =
+      dragCenterY >= currentDrag.lastCenterY ? VERSION_REORDER_FORWARD_THRESHOLD : VERSION_REORDER_BACKWARD_THRESHOLD;
+    currentDrag.lastCenterY = dragCenterY;
+
+    const currentOrder = orderedVersionIdsRef.current;
+    if (!currentOrder.includes(currentDrag.versionId)) {
+      return;
+    }
+
+    const remainingIds = currentOrder.filter((versionId) => versionId !== currentDrag.versionId);
+    let nextIndex = remainingIds.length;
+    for (let index = 0; index < remainingIds.length; index += 1) {
+      const itemNode = versionItemRefs.current.get(remainingIds[index]);
+      if (!itemNode) {
+        continue;
+      }
+
+      const rect = itemNode.getBoundingClientRect();
+      if (dragCenterY < rect.top + rect.height * thresholdRatio) {
+        nextIndex = index;
+        break;
+      }
+    }
+
+    const nextOrder = [...remainingIds];
+    nextOrder.splice(nextIndex, 0, currentDrag.versionId);
+
+    if (!areStringArraysEqual(nextOrder, currentOrder)) {
+      orderedVersionIdsRef.current = nextOrder;
+      setOrderedVersionIds(nextOrder);
+    }
+  }
+
+  function finishVersionDrag(pointerId: number, commitOrder: boolean, event?: PointerEvent) {
+    const currentDrag = dragStateRef.current;
+    if (!currentDrag || currentDrag.pointerId !== pointerId) {
+      return;
+    }
+
+    const finalOrder = orderedVersionIdsRef.current;
+    event?.preventDefault();
+    event?.stopPropagation();
+    dragStateRef.current = null;
+    removeVersionDragListeners();
+    releaseVersionDragPointer(currentDrag);
+    clearDragPreviewFrame();
+    setDragPreview(null);
+    suppressNextSwitchRef.current = true;
+    window.setTimeout(() => {
+      suppressNextSwitchRef.current = false;
+    }, 0);
+
+    if (commitOrder) {
+      void commitVersionOrder(finalOrder);
+    } else {
+      orderedVersionIdsRef.current = currentDrag.initialOrder;
+      setOrderedVersionIds(currentDrag.initialOrder);
+    }
+  }
+
+  function handleWindowVersionDragMove(event: PointerEvent) {
+    const currentDrag = dragStateRef.current;
+    if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if ((event.buttons & 1) === 0) {
+      finishVersionDrag(event.pointerId, true, event);
+      return;
+    }
+
+    scheduleDragPreviewPosition(event.clientX - currentDrag.offsetX, event.clientY - currentDrag.offsetY);
+    moveDraggingVersion(event.clientY);
+  }
+
+  function bindWindowVersionDragListeners() {
+    removeVersionDragListeners();
+
+    const handlePointerMove = (event: PointerEvent) => handleWindowVersionDragMove(event);
+    const handlePointerUp = (event: PointerEvent) => finishVersionDrag(event.pointerId, true, event);
+    const handlePointerCancel = (event: PointerEvent) => finishVersionDrag(event.pointerId, false, event);
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+
+    dragListenerCleanupRef.current = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    };
+  }
+
+  function handleVersionDragStart(event: ReactPointerEvent<HTMLButtonElement>, version: TaskVersion) {
+    if (event.button !== 0 || editingVersionId || busyVersionId || creating || versions.length <= 1) {
+      return;
+    }
+
+    const itemNode = event.currentTarget.closest<HTMLElement>(".version-item");
+    if (!itemNode) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Global pointer listeners still keep the drag responsive if capture is unavailable.
+    }
+    const itemRect = itemNode.getBoundingClientRect();
+    const previewLeft = itemRect.left;
+    const previewTop = itemRect.top;
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      versionId: version.id,
+      sourceElement: event.currentTarget,
+      offsetX: event.clientX - itemRect.left,
+      offsetY: event.clientY - itemRect.top,
+      width: itemRect.width,
+      height: itemRect.height,
+      lastCenterY: itemRect.top + itemRect.height / 2,
+      initialOrder: [...orderedVersionIdsRef.current]
+    };
+
+    scheduleDragPreviewPosition(previewLeft, previewTop);
+    bindWindowVersionDragListeners();
+    suppressNextSwitchRef.current = true;
+    setConfirmingDeleteVersionId(null);
+    setEditingVersionId(null);
+    setEditingName("");
+    setVersionError("");
+    setDragPreview({
+      versionId: version.id,
+      width: itemRect.width,
+      height: itemRect.height
+    });
+    moveDraggingVersion(event.clientY);
+  }
+
+  const dragPreviewVersion = dragPreview ? versions.find((version) => version.id === dragPreview.versionId) ?? null : null;
+  const dragPreviewTaskCount = dragPreviewVersion ? taskCountsByVersion.get(dragPreviewVersion.id) ?? 0 : 0;
+
+  return (
+    <div className="version-layer" role="dialog" aria-label="版本管理">
+      <button className="version-backdrop" title="关闭版本管理" onClick={onClose} />
+      <div className="version-popover" onPointerDown={(event) => event.stopPropagation()}>
+        <header className="version-popover-header">
+          <div>
+            <p>版本</p>
+            <span>当前任务列表</span>
+          </div>
+          <button className="icon-button" title="关闭版本管理" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
+
+        <div className={`version-list${draggingVersionId ? " dragging" : ""}`} role="list">
+          {orderedVersions.map((version) => {
+            const selected = version.id === currentVersionId;
+            const canDelete = !version.isDefault && versions.length > 1;
+            const taskCount = taskCountsByVersion.get(version.id) ?? 0;
+            const busy = busyVersionId === version.id;
+            const confirmingDelete = confirmingDeleteVersionId === version.id;
+            const itemClassName = [
+              "version-item",
+              selected ? "selected" : "",
+              draggingVersionId === version.id ? "dragging" : "",
+              confirmingDelete ? "confirming-delete" : ""
+            ]
+              .filter(Boolean)
+              .join(" ");
+
+            return (
+              <article
+                key={version.id}
+                ref={(node) => {
+                  if (node) {
+                    versionItemRefs.current.set(version.id, node);
+                  } else {
+                    versionItemRefs.current.delete(version.id);
+                  }
+                }}
+                className={itemClassName}
+                role="listitem"
+                aria-grabbed={draggingVersionId === version.id}
+                onContextMenu={(event) => event.preventDefault()}
+              >
+                {editingVersionId === version.id ? (
+                  <form
+                    className="version-edit-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleRenameVersion(version.id);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      value={editingName}
+                      maxLength={MAX_VERSION_NAME_LENGTH}
+                      onChange={(event) => setEditingName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          setEditingVersionId(null);
+                          setEditingName("");
+                        }
+                      }}
+                    />
+                    <button className="icon-button solid" type="submit" title="保存版本名" disabled={busy || orderBusy}>
+                      {busy ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title="取消重命名"
+                      disabled={orderBusy}
+                      onClick={() => {
+                        setEditingVersionId(null);
+                        setEditingName("");
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <button
+                      className="version-drag-grip"
+                      type="button"
+                      title={versions.length <= 1 ? "至少需要两个版本才能排序" : "拖拽排序"}
+                      aria-label={`拖拽排序：${version.name}`}
+                      disabled={versions.length <= 1 || Boolean(busyVersionId) || creating}
+                      onPointerDown={(event) => handleVersionDragStart(event, version)}
+                    >
+                      <GripVertical size={13} />
+                    </button>
+                    <button
+                      className="version-main"
+                      type="button"
+                      title={version.name}
+                      onClick={(event) => {
+                        if (suppressNextSwitchRef.current) {
+                          event.preventDefault();
+                          suppressNextSwitchRef.current = false;
+                          return;
+                        }
+
+                        void handleSwitchVersion(version);
+                      }}
+                    >
+                      <span>{version.name}</span>
+                      <small>{taskCount} 任务</small>
+                    </button>
+                    {confirmingDelete ? (
+                      <div className="version-actions version-actions-confirm">
+                        <span className="version-delete-confirm">确认删除？</span>
+                        <button
+                          className="icon-button danger version-confirm-delete"
+                          type="button"
+                          title="确认删除版本"
+                          disabled={!canDelete || busy || orderBusy}
+                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            void handleDeleteVersion(version);
+                          }}
+                        >
+                          {busy ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="取消删除"
+                          disabled={busy || orderBusy}
+                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            setConfirmingDeleteVersionId(null);
+                          }}
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="version-actions">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="重命名版本"
+                          disabled={orderBusy}
+                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            setVersionError("");
+                            setConfirmingDeleteVersionId(null);
+                            setEditingVersionId(version.id);
+                            setEditingName(version.name);
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          title={version.isDefault ? "默认版本不能删除" : versions.length <= 1 ? "至少保留一个版本" : "删除版本"}
+                          disabled={!canDelete || busy || orderBusy}
+                          onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            void handleDeleteVersion(version);
+                          }}
+                        >
+                          {busy ? <Loader2 className="spin" size={13} /> : <Trash2 size={13} />}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </article>
+            );
+          })}
+        </div>
+
+        <form
+          className="version-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleCreateVersion();
+          }}
+        >
+          <input
+            value={newVersionName}
+            maxLength={MAX_VERSION_NAME_LENGTH}
+            placeholder="新版本名称"
+            onChange={(event) => {
+              setConfirmingDeleteVersionId(null);
+              setNewVersionName(event.target.value);
+            }}
+          />
+          <button className="icon-button solid" type="submit" title="创建版本" disabled={creating || orderBusy}>
+            {creating ? <Loader2 className="spin" size={14} /> : <Plus size={15} />}
+          </button>
+        </form>
+        {versionError ? <div className="version-error">{versionError}</div> : null}
+      </div>
+      {dragPreview && dragPreviewVersion
+        ? createPortal(
+            <div
+              ref={(node) => {
+                dragPreviewRef.current = node;
+                if (node) {
+                  flushDragPreviewPosition();
+                }
+              }}
+              className="version-drag-preview"
+              style={{
+                width: dragPreview.width,
+                height: dragPreview.height
+              }}
+              aria-hidden="true"
+            >
+              <span className="version-drag-grip preview">
+                <GripVertical size={13} />
+              </span>
+              <div className="version-preview-main">
+                <span>{dragPreviewVersion.name}</span>
+                <small>{dragPreviewTaskCount} 任务</small>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }
@@ -841,11 +1725,29 @@ function TaskApp({
   const [showMineOnly, setShowMineOnly] = useState(false);
   const [activeAssignmentTaskId, setActiveAssignmentTaskId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [versionPanelOpen, setVersionPanelOpen] = useState(false);
+  const [taskMenu, setTaskMenu] = useState<{
+    taskId: string;
+    x: number;
+    y: number;
+    submenuX: "left" | "right";
+    submenuY: "down" | "up";
+  } | null>(null);
   const [addressCopied, setAddressCopied] = useState(false);
   const copyFeedbackTimer = useRef<number | null>(null);
   const hostShareAddress = hostInfo?.url ?? hostInfo?.addresses[0] ?? "";
   const statusLabel = addressCopied ? "已复制" : hostInfo ? "Host" : status.phase === "connected" ? "Client" : "LAN";
+
+  const currentVersion = useMemo(() => getCurrentVersion(state), [state]);
+  const currentVersionId = currentVersion?.id ?? "";
+  const versions = useMemo(() => state.versions, [state.versions]);
+  const versionTaskCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    state.tasks.forEach((task) => {
+      counts.set(task.versionId, (counts.get(task.versionId) ?? 0) + 1);
+    });
+    return counts;
+  }, [state.tasks]);
 
   const users = useMemo(() => {
     const byId = new Map<string, UserProfile>();
@@ -864,13 +1766,15 @@ function TaskApp({
 
   const sortedTasks = useMemo(
     () =>
-      [...state.tasks].sort((left, right) => {
-        if (left.completed !== right.completed) {
-          return Number(left.completed) - Number(right.completed);
-        }
-        return Date.parse(left.createdAt) - Date.parse(right.createdAt);
-      }),
-    [state.tasks]
+      state.tasks
+        .filter((task) => !currentVersionId || task.versionId === currentVersionId)
+        .sort((left, right) => {
+          if (left.completed !== right.completed) {
+            return Number(left.completed) - Number(right.completed);
+          }
+          return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+        }),
+    [currentVersionId, state.tasks]
   );
 
   const activeTasks = useMemo(() => sortedTasks.filter((task) => !isTaskInTrash(task)), [sortedTasks]);
@@ -971,6 +1875,38 @@ function TaskApp({
     setAdding(false);
   }
 
+  async function createVersion(name: string) {
+    setError("");
+    await window.coWorkApi.createVersion(name);
+  }
+
+  async function renameVersion(versionId: string, name: string) {
+    setError("");
+    await window.coWorkApi.renameVersion(versionId, name);
+  }
+
+  async function deleteVersion(versionId: string) {
+    setTaskMenu(null);
+    setActiveAssignmentTaskId(null);
+    setAdding(false);
+    setError("");
+    await window.coWorkApi.deleteVersion(versionId);
+  }
+
+  async function reorderVersions(versionIds: string[]) {
+    setError("");
+    await window.coWorkApi.reorderVersions(versionIds);
+  }
+
+  async function switchVersion(versionId: string) {
+    setTaskMenu(null);
+    setActiveAssignmentTaskId(null);
+    setAdding(false);
+    setSettingsOpen(false);
+    setError("");
+    await window.coWorkApi.switchVersion(versionId);
+  }
+
   async function toggleTask(task: Task) {
     await window.coWorkApi.toggleTask(task.id, !task.completed);
   }
@@ -983,14 +1919,46 @@ function TaskApp({
     event.preventDefault();
     event.stopPropagation();
     setSettingsOpen(false);
+    setVersionPanelOpen(false);
 
-    const menuWidth = 164;
-    const menuHeight = 40;
+    const menuWidth = 176;
+    const menuHeight = 70;
+    const submenuWidth = 178;
+    const submenuHeight = Math.min(window.innerHeight - 16, versions.length * 30 + 10);
+    const menuInset = 8;
+    const panelRect = event.currentTarget.closest(".task-panel")?.getBoundingClientRect();
+    const panelLeft = panelRect?.left ?? 0;
+    const panelTop = panelRect?.top ?? 0;
+    const panelWidth = panelRect?.width ?? window.innerWidth;
+    const panelHeight = panelRect?.height ?? window.innerHeight;
+    const rawMenuX = event.clientX - panelLeft;
+    const rawMenuY = event.clientY - panelTop;
+    const rightCascadeMaxX = panelWidth - menuWidth - submenuWidth - menuInset;
+    const canFitRightCascade = rightCascadeMaxX >= menuInset;
+    const menuX = canFitRightCascade
+      ? Math.max(menuInset, Math.min(rawMenuX, rightCascadeMaxX))
+      : Math.max(menuInset, Math.min(rawMenuX, panelWidth - menuWidth - menuInset));
+    const menuY = Math.max(menuInset, Math.min(rawMenuY, panelHeight - menuHeight - menuInset));
+
     setTaskMenu({
       taskId: task.id,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
+      x: menuX,
+      y: menuY,
+      submenuX: canFitRightCascade ? "right" : "left",
+      submenuY: menuY + submenuHeight + 8 > panelHeight ? "up" : "down"
     });
+  }
+
+  async function moveTaskToVersion(task: Task, versionId: string) {
+    setTaskMenu(null);
+    setActiveAssignmentTaskId(null);
+    setError("");
+
+    try {
+      await window.coWorkApi.moveTaskToVersion(task.id, versionId);
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : "移动任务失败。");
+    }
   }
 
   async function moveTaskToTrash(task: Task) {
@@ -1001,7 +1969,7 @@ function TaskApp({
     try {
       await window.coWorkApi.moveTaskToTrash(task.id);
     } catch (trashError) {
-      setError(trashError instanceof Error ? trashError.message : "移动到垃圾桶失败。");
+      setError(trashError instanceof Error ? trashError.message : "删除失败。");
     }
   }
 
@@ -1035,6 +2003,7 @@ function TaskApp({
 
   return (
     <main className="app-panel task-panel">
+      <MainWindowResizeHandle edge="top" />
       <aside className="side-rail">
         <div className="current-user">
           <button className="current-user-avatar" type="button" title="修改账号资料" aria-label="修改账号资料" onClick={onEditProfile}>
@@ -1065,12 +2034,27 @@ function TaskApp({
             <Wifi size={13} />
             <span>{statusLabel}</span>
           </button>
+          <button
+            className={`version-button${versionPanelOpen ? " active" : ""}`}
+            type="button"
+            title={currentVersion ? `当前版本：${currentVersion.name}` : "当前版本"}
+            onClick={() => {
+              setTaskMenu(null);
+              setActiveAssignmentTaskId(null);
+              setSettingsOpen(false);
+              setVersionPanelOpen((current) => !current);
+            }}
+          >
+            <Layers size={13} />
+            <span>当前版本：{currentVersion?.name ?? "默认版本"}</span>
+          </button>
           <WindowControls
             pinned={pinned}
             onTogglePin={onTogglePin}
             onOpenSettings={() => {
               setTaskMenu(null);
               setActiveAssignmentTaskId(null);
+              setVersionPanelOpen(false);
               setSettingsOpen((current) => !current);
             }}
             onMinimize={onMinimize}
@@ -1104,21 +2088,26 @@ function TaskApp({
           />
         ) : null}
 
+        {versionPanelOpen ? (
+          <VersionPopover
+            versions={versions}
+            currentVersionId={currentVersionId}
+            taskCountsByVersion={versionTaskCounts}
+            onClose={() => setVersionPanelOpen(false)}
+            onCreateVersion={createVersion}
+            onRenameVersion={renameVersion}
+            onDeleteVersion={deleteVersion}
+            onReorderVersions={reorderVersions}
+            onSwitchVersion={switchVersion}
+          />
+        ) : null}
+
         {settingsOpen ? (
           <SettingsPanel
             trashedTasks={trashedTasks}
             onClose={() => setSettingsOpen(false)}
             onOpenTask={openTaskDetail}
             onRestoreTask={restoreTask}
-          />
-        ) : null}
-
-        {contextMenuTask && taskMenu ? (
-          <TaskContextMenu
-            task={contextMenuTask}
-            x={taskMenu.x}
-            y={taskMenu.y}
-            onMoveToTrash={moveTaskToTrash}
           />
         ) : null}
 
@@ -1152,12 +2141,28 @@ function TaskApp({
 
         {error ? <div className="floating-error">{error}</div> : null}
       </section>
+
+      {contextMenuTask && taskMenu ? (
+        <TaskContextMenu
+          task={contextMenuTask}
+          versions={versions}
+          x={taskMenu.x}
+          y={taskMenu.y}
+          submenuX={taskMenu.submenuX}
+          submenuY={taskMenu.submenuY}
+          onMoveToVersion={moveTaskToVersion}
+          onMoveToTrash={moveTaskToTrash}
+        />
+      ) : null}
+
+      <MainWindowResizeHandle edge="bottom" />
     </main>
   );
 }
 
 function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostData }) {
   const task = useMemo(() => state.tasks.find((item) => item.id === taskId), [state.tasks, taskId]);
+  const usersById = useMemo(() => new Map(state.users.map((user) => [user.id, user])), [state.users]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [screenshots, setScreenshots] = useState<TaskScreenshot[]>([]);
@@ -1229,6 +2234,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
     try {
       await window.coWorkApi.updateTaskDetails(task.id, cleanTitle, description, screenshots);
       setSavedMessage("已保存");
+      await window.coWorkApi.closeWindow();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "保存任务详情失败。");
     } finally {
@@ -1271,15 +2277,37 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
   }
 
   const taskIsTrashed = isTaskInTrash(task);
+  const creator = task.creatorId ? usersById.get(task.creatorId) : undefined;
+  const assignee = task.assigneeId ? usersById.get(task.assigneeId) : undefined;
+  const creatorName = getTaskPersonDisplayName(creator, task.creatorId, "未记录");
+  const assigneeName = getTaskPersonDisplayName(assignee, task.assigneeId, "未分配");
 
   return (
     <main className="detail-window" onPaste={(event) => void handlePaste(event)}>
       <header className="detail-header">
-        <div>
+        <div className="detail-header-main">
           <p>任务详情</p>
           <h1>{task.title}</h1>
         </div>
-        <DetailWindowControls />
+        <div className="detail-header-right">
+          <div className="detail-user-meta" aria-label="任务人员信息">
+            <div className="detail-user-card" title={`任务创建人：${creatorName}`}>
+              <span>任务创建人</span>
+              <div>
+                <Avatar user={creator} size="sm" />
+                <strong>{creatorName}</strong>
+              </div>
+            </div>
+            <div className="detail-user-card" title={`任务当前所属人：${assigneeName}`}>
+              <span>当前所属人</span>
+              <div>
+                <Avatar user={assignee} size="sm" />
+                <strong>{assigneeName}</strong>
+              </div>
+            </div>
+          </div>
+          <DetailWindowControls />
+        </div>
       </header>
 
       <section className="detail-content">
@@ -1368,9 +2396,6 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
         <div className="detail-message">
           {error ? <span className="error-text">{error}</span> : savedMessage ? <span className="success-text">{savedMessage}</span> : null}
         </div>
-        <button className="secondary-button plain" onClick={() => void window.coWorkApi.closeWindow()}>
-          关闭
-        </button>
         <button className="primary-button save-button" disabled={saving} onClick={() => void saveDetails()}>
           {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
           保存
@@ -1402,6 +2427,7 @@ export function App() {
   const detailRoute = useMemo(getDetailRoute, []);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [state, setState] = useState<HostData>(EMPTY_STATE);
+  const [preferences, setPreferences] = useState<AppPreferences>({});
   const [status, setStatus] = useState<ConnectionStatus>({ phase: "idle", message: "未连接" });
   const [hostInfo, setHostInfo] = useState<HostInfo | null>(null);
   const [lanUrls, setLanUrls] = useState<string[]>([]);
@@ -1411,6 +2437,7 @@ export function App() {
   const [pinned, setPinned] = useState(true);
   const [compactMode, setCompactMode] = useState(false);
   const [compactTaskSnapshot, setCompactTaskSnapshot] = useState<Map<string, CompactTaskSnapshot> | null>(null);
+  const isTaskMainView = !detailRoute.isDetail && !loading && !compactMode && connected && profile !== null && !editingProfile;
 
   useEffect(() => {
     const cleanupState = window.coWorkApi.onState((nextState) => {
@@ -1431,9 +2458,11 @@ export function App() {
     const cleanupHost = window.coWorkApi.onHostInfo(setHostInfo);
     const cleanupCompactMode = window.coWorkApi.onCompactMode(setCompactMode);
 
-    void Promise.all([window.coWorkApi.getState().then(setState), window.coWorkApi.getLanAddresses().then(setLanUrls)]).finally(() =>
-      setLoading(false)
-    );
+    void Promise.all([
+      window.coWorkApi.getState().then(setState),
+      window.coWorkApi.getPreferences().then(setPreferences),
+      window.coWorkApi.getLanAddresses().then(setLanUrls)
+    ]).finally(() => setLoading(false));
 
     return () => {
       cleanupState();
@@ -1463,6 +2492,14 @@ export function App() {
     }
   }, [profile, state.users]);
 
+  useEffect(() => {
+    if (loading || detailRoute.isDetail || compactMode || isTaskMainView) {
+      return;
+    }
+
+    void window.coWorkApi.resetMainWindowSize();
+  }, [compactMode, detailRoute.isDetail, isTaskMainView, loading]);
+
   async function togglePinned() {
     const next = !pinned;
     await window.coWorkApi.setAlwaysOnTop(next);
@@ -1470,7 +2507,7 @@ export function App() {
   }
 
   function enterCompactMode() {
-    setCompactTaskSnapshot(createCompactTaskSnapshot(state.tasks));
+    setCompactTaskSnapshot(createCompactTaskSnapshot(getCurrentVersionTasks(state)));
     setCompactMode(true);
     void window.coWorkApi.minimizeWindow();
   }
@@ -1482,10 +2519,12 @@ export function App() {
   }
 
   function handleAuthResult(result: AccountAuthResult) {
+    setPreferences((current) => ({ ...current, lastAccountId: result.profile.id }));
     setProfile(result.profile);
     setEditingProfile(result.requiresProfileSetup);
   }
 
+  const compactVersionTasks = useMemo(() => getCurrentVersionTasks(state), [state]);
   const compactMetrics = useMemo(() => {
     if (!profile) {
       return {
@@ -1495,10 +2534,10 @@ export function App() {
     }
 
     return {
-      taskCount: countMyActiveTasks(state.tasks, profile.id),
-      changeCount: countCompactTaskChanges(state.tasks, compactTaskSnapshot, profile.id)
+      taskCount: countMyActiveTasks(compactVersionTasks, profile.id),
+      changeCount: countCompactTaskChanges(compactVersionTasks, compactTaskSnapshot, profile.id)
     };
-  }, [compactTaskSnapshot, profile, state.tasks]);
+  }, [compactTaskSnapshot, compactVersionTasks, profile]);
 
   if (loading) {
     return (
@@ -1529,7 +2568,9 @@ export function App() {
         status={status}
         hostInfo={hostInfo}
         lanUrls={lanUrls}
+        initialJoinAddress={preferences.lastJoinAddress ?? ""}
         onConnected={() => setConnected(true)}
+        onJoined={(lastJoinAddress) => setPreferences((current) => ({ ...current, lastJoinAddress }))}
         onMinimize={enterCompactMode}
       />
     );
@@ -1539,6 +2580,7 @@ export function App() {
     return (
       <AccountView
         status={status}
+        initialAccountId={preferences.lastAccountId ?? ""}
         onAuthenticated={handleAuthResult}
         onMinimize={enterCompactMode}
       />
