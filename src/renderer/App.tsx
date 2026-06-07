@@ -1718,7 +1718,6 @@ function SettingsPanel({
         <button className="settings-nav-item selected" type="button" aria-pressed="true">
           <Trash2 size={15} />
           <span>垃圾桶</span>
-          <strong>{sortedTrashedTasks.length}</strong>
         </button>
       </aside>
 
@@ -1829,7 +1828,6 @@ function SettingsPanelWithUpdates({
         >
           <Trash2 size={15} />
           <span>垃圾桶</span>
-          <strong>{sortedTrashedTasks.length}</strong>
         </button>
       </aside>
 
@@ -2005,8 +2003,8 @@ function TaskApp({
   const activeTasks = useMemo(() => sortedTasks.filter((task) => !isTaskInTrash(task)), [sortedTasks]);
 
   const trashedTasks = useMemo(
-    () => sortedTasks.filter((task) => isTaskInTrash(task) && !isExpiredTrashedTask(task)),
-    [sortedTasks]
+    () => state.tasks.filter((task) => isTaskInTrash(task) && !isExpiredTrashedTask(task)),
+    [state.tasks]
   );
 
   const visibleTasks = useMemo(
