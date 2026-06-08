@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage, type Rectangle } from "electron";
 import log from "electron-log/main";
 import { autoUpdater, type AppUpdater, type ProgressInfo, type UpdateInfo, type VerifyUpdateCodeSignature } from "electron-updater";
 import { getFileList, parseUpdateInfo, Provider, type ProviderRuntimeOptions } from "electron-updater/out/providers/Provider";
@@ -615,17 +615,44 @@ function setMainWindowCompact(compact: boolean): void {
   updateTrayMenu();
 }
 
+function getCompactMoveProbeOffset(nextStart: number, currentStart: number, size: number): number {
+  if (nextStart > currentStart) {
+    return size;
+  }
+
+  if (nextStart < currentStart) {
+    return 0;
+  }
+
+  return size / 2;
+}
+
+function getCompactMoveWorkArea(bounds: Rectangle, nextX: number, nextY: number): Rectangle {
+  const currentDisplay = screen.getDisplayMatching(bounds);
+  const cursorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+
+  if (cursorDisplay.id !== currentDisplay.id) {
+    return cursorDisplay.workArea;
+  }
+
+  return screen.getDisplayNearestPoint({
+    x: Math.round(nextX + getCompactMoveProbeOffset(nextX, bounds.x, bounds.width)),
+    y: Math.round(nextY + getCompactMoveProbeOffset(nextY, bounds.y, bounds.height))
+  }).workArea;
+}
+
 function moveMainCompactWindowBy(deltaX: number, deltaY: number): void {
   if (!mainWindow || mainWindow.isDestroyed() || !isMainWindowCompact) {
     return;
   }
 
   const bounds = mainWindow.getBounds();
-  const display = screen.getDisplayMatching(bounds);
-  const workArea = display.workArea;
+  const nextX = bounds.x + Math.round(deltaX);
+  const nextY = bounds.y + Math.round(deltaY);
+  const workArea = getCompactMoveWorkArea(bounds, nextX, nextY);
   mainWindow.setPosition(
-    clamp(bounds.x + Math.round(deltaX), workArea.x, workArea.x + workArea.width - bounds.width),
-    clamp(bounds.y + Math.round(deltaY), workArea.y, workArea.y + workArea.height - bounds.height),
+    clampWindowAxis(nextX, workArea.x, workArea.x + workArea.width - bounds.width),
+    clampWindowAxis(nextY, workArea.y, workArea.y + workArea.height - bounds.height),
     false
   );
 }
