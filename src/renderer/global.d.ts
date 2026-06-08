@@ -14,6 +14,7 @@ declare global {
     coWorkApi: {
       getState: () => Promise<HostData>;
       getPreferences: () => Promise<AppPreferences>;
+      patchPreferences: (preferences: Partial<AppPreferences>) => Promise<AppPreferences>;
       getLanAddresses: () => Promise<string[]>;
       startHost: () => Promise<HostInfo>;
       stopHost: () => Promise<void>;

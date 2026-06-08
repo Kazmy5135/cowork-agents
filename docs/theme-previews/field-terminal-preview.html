@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Field Terminal Theme Preview</title>
+    <style>
+      :root {
+        --bg: #020604;
+        --terminal: #06140b;
+        --terminal-raised: #0a1d10;
+        --terminal-soft: rgba(21, 255, 82, 0.06);
+        --text: #9cffb1;
+        --text-strong: #d7ffe0;
+        --text-soft: #66d886;
+        --text-muted: #3f935a;
+        --accent: #15ff52;
+        --accent-soft: rgba(21, 255, 82, 0.16);
+        --amber: #ffb300;
+        --cyan: #00cfff;
+        --danger: #ff4a4a;
+        --stroke: rgba(21, 255, 82, 0.5);
+        --stroke-soft: rgba(21, 255, 82, 0.22);
+        --shadow: 0 0 0 1px rgba(21, 255, 82, 0.22), 0 0 30px rgba(21, 255, 82, 0.16);
+        --font:
+          "Share Tech Mono",
+          "IBM Plex Mono",
+          "JetBrains Mono",
+          Consolas,
+          "Microsoft YaHei UI",
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 1280px;
+        height: 800px;
+        margin: 0;
+        overflow: hidden;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 50% 42%, rgba(21, 255, 82, 0.1), transparent 46%),
+          linear-gradient(145deg, #030806 0%, #010201 70%);
+        font-family: var(--font);
+        letter-spacing: 0;
+      }
+
+      .stage {
+        width: 100%;
+        height: 100%;
+        position: relative;
+        padding: 54px 62px;
+      }
+
+      .stage::before,
+      .stage::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .stage::before {
+        background:
+          repeating-linear-gradient(
+            to bottom,
+            rgba(156, 255, 177, 0.075) 0,
+            rgba(156, 255, 177, 0.075) 1px,
+            transparent 1px,
+            transparent 4px
+          );
+        opacity: 0.45;
+        mix-blend-mode: screen;
+      }
+
+      .stage::after {
+        background:
+          radial-gradient(circle at 50% 44%, transparent 0 54%, rgba(0, 0, 0, 0.68) 100%),
+          linear-gradient(90deg, rgba(21, 255, 82, 0.05), transparent 18%, transparent 82%, rgba(21, 255, 82, 0.05));
+      }
+
+      .bezel {
+        width: 920px;
+        height: 520px;
+        position: absolute;
+        left: 118px;
+        top: 94px;
+        padding: 26px 28px 30px;
+        background:
+          linear-gradient(180deg, rgba(21, 255, 82, 0.07), transparent 28%),
+          var(--terminal);
+        border: 1px solid var(--stroke);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+      }
+
+      .panel {
+        position: relative;
+        background: rgba(4, 12, 7, 0.96);
+        border: 1px solid var(--stroke-soft);
+        box-shadow: inset 0 0 22px rgba(21, 255, 82, 0.06);
+      }
+
+      .app-grid {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 118px minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .rail {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 14px;
+        padding: 14px 12px;
+      }
+
+      .avatar {
+        width: 58px;
+        height: 58px;
+        display: grid;
+        place-items: center;
+        margin: 0 auto;
+        color: var(--text-strong);
+        background: rgba(21, 255, 82, 0.08);
+        border: 1px solid var(--stroke);
+        border-radius: 4px;
+        box-shadow: inset 0 0 14px rgba(21, 255, 82, 0.08);
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .rail-name {
+        margin-top: 8px;
+        color: var(--text-strong);
+        font-size: 12px;
+        text-align: center;
+      }
+
+      .rail-meta {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+      }
+
+      .meta-chip,
+      .tab,
+      .task-row,
+      .button,
+      .settings-nav,
+      .option-row {
+        background: rgba(21, 255, 82, 0.045);
+        border: 1px solid var(--stroke-soft);
+      }
+
+      .meta-chip {
+        padding: 8px;
+        color: var(--text-muted);
+        font-size: 10px;
+      }
+
+      .meta-chip strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--text-strong);
+        font-size: 15px;
+      }
+
+      .scope {
+        height: 56px;
+        display: grid;
+        place-items: center;
+        color: var(--bg);
+        background: var(--accent);
+        border: 0;
+        border-radius: 3px;
+        font-size: 15px;
+        font-weight: 900;
+        box-shadow: 0 0 18px rgba(21, 255, 82, 0.26);
+      }
+
+      .task-shell {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .status {
+        height: 26px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 10px;
+        color: var(--bg);
+        background: var(--accent);
+        border-radius: 2px;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .version {
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        padding: 0 12px;
+        color: var(--text-strong);
+        border: 1px solid var(--stroke);
+        font-size: 12px;
+        text-shadow: 0 0 6px rgba(21, 255, 82, 0.34);
+      }
+
+      .controls {
+        display: flex;
+        gap: 7px;
+      }
+
+      .control {
+        width: 26px;
+        height: 26px;
+        position: relative;
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        border: 1px solid var(--stroke-soft);
+        font-size: 13px;
+      }
+
+      .control-icon {
+        width: 15px;
+        height: 15px;
+        position: relative;
+        display: block;
+      }
+
+      .control-icon::before,
+      .control-icon::after {
+        content: "";
+        position: absolute;
+        display: block;
+      }
+
+      .control-pin::before {
+        width: 9px;
+        height: 6px;
+        left: 3px;
+        top: 1px;
+        border: 1px solid currentColor;
+        border-bottom: 0;
+        transform: skewX(-10deg);
+      }
+
+      .control-pin::after {
+        width: 1px;
+        height: 11px;
+        left: 7px;
+        top: 5px;
+        background: currentColor;
+        box-shadow: -4px 3px 0 -0.5px currentColor, 4px 3px 0 -0.5px currentColor;
+        transform: rotate(24deg);
+        transform-origin: top center;
+      }
+
+      .control-gear::before {
+        width: 12px;
+        height: 12px;
+        left: 1px;
+        top: 1px;
+        border: 2px solid currentColor;
+        border-radius: 50%;
+        box-shadow:
+          0 -4px 0 -2px currentColor,
+          0 4px 0 -2px currentColor,
+          -4px 0 0 -2px currentColor,
+          4px 0 0 -2px currentColor;
+      }
+
+      .control-gear::after {
+        width: 4px;
+        height: 4px;
+        left: 5px;
+        top: 5px;
+        background: currentColor;
+        border-radius: 50%;
+      }
+
+      .control-close::before,
+      .control-close::after {
+        width: 16px;
+        height: 2px;
+        left: 0;
+        top: 7px;
+        background: currentColor;
+      }
+
+      .control-close::before {
+        transform: rotate(45deg);
+      }
+
+      .control-close::after {
+        transform: rotate(-45deg);
+      }
+
+      .tabs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 7px;
+      }
+
+      .tab {
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .tab.active {
+        color: var(--text-strong);
+        border-color: var(--stroke);
+        box-shadow: inset 0 -2px 0 var(--accent);
+      }
+
+      .task-list {
+        display: grid;
+        align-content: start;
+        gap: 9px;
+      }
+
+      .task-row {
+        height: 44px;
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) 92px 42px;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+      }
+
+      .check {
+        width: 18px;
+        height: 18px;
+        border: 1px solid var(--accent);
+      }
+
+      .check.done {
+        background: var(--accent);
+        box-shadow: 0 0 12px rgba(21, 255, 82, 0.34);
+      }
+
+      .task-title {
+        min-width: 0;
+      }
+
+      .task-title strong {
+        display: block;
+        overflow: hidden;
+        color: var(--text-strong);
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .task-title span {
+        display: block;
+        margin-top: 2px;
+        overflow: hidden;
+        color: var(--text-muted);
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .owner {
+        color: var(--text-soft);
+        font-size: 11px;
+        text-align: right;
+      }
+
+      .counter {
+        width: 30px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        color: var(--bg);
+        background: var(--accent);
+        border-radius: 2px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .footer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 128px;
+        gap: 10px;
+      }
+
+      .input {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+        color: var(--text-muted);
+        background: rgba(21, 255, 82, 0.035);
+        border: 1px solid var(--stroke-soft);
+        font-size: 12px;
+      }
+
+      .button {
+        height: 34px;
+        display: grid;
+        place-items: center;
+        color: var(--bg);
+        background: var(--accent);
+        border-color: var(--accent);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .settings {
+        width: 376px;
+        height: 286px;
+        position: absolute;
+        right: 84px;
+        top: 168px;
+        display: grid;
+        grid-template-columns: 116px minmax(0, 1fr);
+        box-shadow: 0 0 0 1px rgba(21, 255, 82, 0.26), 0 0 38px rgba(0, 0, 0, 0.74);
+      }
+
+      .settings-side {
+        padding: 12px 8px;
+        border-right: 1px solid var(--stroke-soft);
+      }
+
+      .settings-title {
+        margin-bottom: 10px;
+        color: var(--text-strong);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .settings-nav {
+        height: 34px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 7px;
+        padding: 0 8px;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .settings-nav.active {
+        color: var(--bg);
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .settings-body {
+        padding: 12px;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .section-heading p,
+      .section-heading span {
+        margin: 0;
+      }
+
+      .section-heading p {
+        color: var(--text-strong);
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .section-heading span {
+        color: var(--text-muted);
+        font-size: 10px;
+      }
+
+      .option-row {
+        height: 54px;
+        display: grid;
+        grid-template-columns: 58px minmax(0, 1fr) 18px;
+        align-items: center;
+        gap: 10px;
+        padding: 0 9px;
+        color: var(--text-strong);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .preview-chip {
+        height: 32px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        padding: 5px;
+        border: 1px solid var(--stroke);
+      }
+
+      .preview-chip span:first-child {
+        background: var(--terminal-soft);
+        border: 1px solid var(--stroke-soft);
+      }
+
+      .preview-chip span:last-child {
+        background: var(--accent);
+      }
+
+      .detail {
+        width: 438px;
+        height: 246px;
+        position: absolute;
+        left: 604px;
+        bottom: 68px;
+        padding: 14px;
+        box-shadow: 0 0 0 1px rgba(21, 255, 82, 0.22), 0 0 34px rgba(0, 0, 0, 0.78);
+      }
+
+      .detail-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--stroke-soft);
+      }
+
+      .detail-head p,
+      .detail-head h2 {
+        margin: 0;
+      }
+
+      .detail-head p {
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 900;
+      }
+
+      .detail-head h2 {
+        margin-top: 3px;
+        color: var(--text-strong);
+        font-size: 17px;
+      }
+
+      .mini-users {
+        display: flex;
+        gap: 6px;
+      }
+
+      .mini-user {
+        width: 74px;
+        padding: 5px;
+        border: 1px solid var(--stroke-soft);
+        color: var(--text-muted);
+        font-size: 9px;
+      }
+
+      .mini-user strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--text-soft);
+        font-size: 11px;
+      }
+
+      .field {
+        height: 32px;
+        margin-bottom: 9px;
+        padding: 8px;
+        color: var(--text-strong);
+        background: rgba(21, 255, 82, 0.035);
+        border: 1px solid var(--stroke-soft);
+        font-size: 12px;
+      }
+
+      .textarea {
+        height: 72px;
+        padding: 8px;
+        color: var(--text-muted);
+        background: rgba(21, 255, 82, 0.035);
+        border: 1px solid var(--stroke-soft);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .label {
+        position: absolute;
+        left: 66px;
+        top: 22px;
+        color: rgba(156, 255, 177, 0.5);
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .palette {
+        position: absolute;
+        left: 118px;
+        bottom: 58px;
+        display: flex;
+        gap: 8px;
+      }
+
+      .swatch {
+        width: 54px;
+        height: 22px;
+        border: 1px solid var(--stroke-soft);
+      }
+
+      .swatch.green {
+        background: #15ff52;
+      }
+
+      .swatch.amber {
+        background: #ffb300;
+      }
+
+      .swatch.blue {
+        background: #00cfff;
+      }
+
+      .caption {
+        position: absolute;
+        right: 82px;
+        bottom: 38px;
+        color: rgba(156, 255, 177, 0.48);
+        font-size: 10px;
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="label">COWORK AGENTS LAN / FIELD TERMINAL THEME CONCEPT</div>
+
+      <main class="bezel">
+        <div class="app-grid">
+          <aside class="rail panel">
+            <div>
+              <div class="avatar">KZ</div>
+              <div class="rail-name">Kazmy</div>
+            </div>
+            <div class="rail-meta">
+              <div class="meta-chip">ACTIVE<strong>06</strong></div>
+              <div class="meta-chip">SYNC<strong>LAN</strong></div>
+              <div class="meta-chip">BUILD<strong>0.1</strong></div>
+            </div>
+            <div class="scope">MY<br />TASK</div>
+          </aside>
+
+          <section class="task-shell panel">
+            <div class="topbar">
+              <div class="status">HOST / ONLINE</div>
+              <div class="version">当前版本：垂直切片 0.2</div>
+              <div class="controls">
+                <div class="control" title="置顶"><span class="control-icon control-pin"></span></div>
+                <div class="control" title="设置"><span class="control-icon control-gear"></span></div>
+                <div class="control" title="关闭"><span class="control-icon control-close"></span></div>
+              </div>
+            </div>
+
+            <div class="tabs">
+              <div class="tab active">TASKS</div>
+              <div class="tab">VERSIONS</div>
+              <div class="tab">USERS</div>
+              <div class="tab">LOG</div>
+            </div>
+
+            <div class="task-list">
+              <div class="task-row">
+                <div class="check done"></div>
+                <div class="task-title">
+                  <strong>完成局域网主机联机流程</strong>
+                  <span>SERVER HANDSHAKE / ACCOUNT CACHE / HOST ADDRESS</span>
+                </div>
+                <div class="owner">Kazmy</div>
+                <div class="counter">01</div>
+              </div>
+              <div class="task-row">
+                <div class="check"></div>
+                <div class="task-title">
+                  <strong>新增主题切换和本地偏好保存</strong>
+                  <span>SETTINGS / THEME / PREFERENCES PATCH</span>
+                </div>
+                <div class="owner">Dhy</div>
+                <div class="counter">02</div>
+              </div>
+              <div class="task-row">
+                <div class="check"></div>
+                <div class="task-title">
+                  <strong>制作终端风格任务详情窗口</strong>
+                  <span>DETAIL VIEW / SCREENSHOT GRID / FORM CONTROLS</span>
+                </div>
+                <div class="owner">未分配</div>
+                <div class="counter">03</div>
+              </div>
+              <div class="task-row">
+                <div class="check"></div>
+                <div class="task-title">
+                  <strong>验证中文文本在紧凑控件中不溢出</strong>
+                  <span>TYPOGRAPHY / CJK FALLBACK / DENSE LAYOUT</span>
+                </div>
+                <div class="owner">Kazmy</div>
+                <div class="counter">04</div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <div class="input">新增任务 / INPUT BUFFER READY</div>
+              <div class="button">ADD TASK</div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <section class="settings panel">
+        <aside class="settings-side">
+          <div class="settings-title">基础设置</div>
+          <div class="settings-nav">垃圾桶 <span>0</span></div>
+          <div class="settings-nav active">主题 <span>ON</span></div>
+        </aside>
+        <div class="settings-body">
+          <div class="section-heading">
+            <div>
+              <p>主题</p>
+              <span>当前：野外终端</span>
+            </div>
+            <div class="control">X</div>
+          </div>
+          <div class="option-row">
+            <div class="preview-chip"><span></span><span></span></div>
+            <span>默认</span>
+            <span></span>
+          </div>
+          <div class="option-row" style="margin-top: 8px; border-color: var(--stroke);">
+            <div class="preview-chip"><span></span><span></span></div>
+            <span>野外终端</span>
+            <span>✓</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail panel">
+        <div class="detail-head">
+          <div>
+            <p>任务详情 / TASK DETAIL</p>
+            <h2>终端风格任务详情窗口</h2>
+          </div>
+          <div class="mini-users">
+            <div class="mini-user">创建人<strong>Kazmy</strong></div>
+            <div class="mini-user">负责人<strong>Dhy</strong></div>
+          </div>
+        </div>
+        <div class="field">任务名字：制作 field-terminal 主题</div>
+        <div class="textarea">
+          描述：保持任务协作工具的可读性，用原创复古终端风格替代玻璃材质。扫描线和辉光必须克制，截图区域不可被染色。
+        </div>
+      </section>
+
+      <div class="palette">
+        <div class="swatch green"></div>
+        <div class="swatch amber"></div>
+        <div class="swatch blue"></div>
+      </div>
+      <div class="caption">
+        Original field-terminal concept, not using Fallout or Pip-Boy assets.<br />
+        CSS-first direction for Cowork Agents LAN.
+      </div>
+    </div>
+  </body>
+</html>

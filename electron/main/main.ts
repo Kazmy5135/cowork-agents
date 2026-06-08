@@ -448,6 +448,8 @@ function registerIpc(): void {
 
   ipcMain.handle("preferences:get", () => preferencesStore.load());
 
+  ipcMain.handle("preferences:patch", (_event, preferences: Partial<AppPreferences>) => preferencesStore.patch(preferences));
+
   ipcMain.handle("network:addresses", () => listLanUrls(DEFAULT_PORT));
 
   ipcMain.handle("clipboard:write-text", (_event, text: string) => {

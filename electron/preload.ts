@@ -13,6 +13,8 @@ import type {
 contextBridge.exposeInMainWorld("coWorkApi", {
   getState: () => ipcRenderer.invoke("state:get") as Promise<HostData>,
   getPreferences: () => ipcRenderer.invoke("preferences:get") as Promise<AppPreferences>,
+  patchPreferences: (preferences: Partial<AppPreferences>) =>
+    ipcRenderer.invoke("preferences:patch", preferences) as Promise<AppPreferences>,
   getLanAddresses: () => ipcRenderer.invoke("network:addresses") as Promise<string[]>,
   startHost: () => ipcRenderer.invoke("host:start") as Promise<HostInfo>,
   stopHost: () => ipcRenderer.invoke("host:stop") as Promise<void>,
