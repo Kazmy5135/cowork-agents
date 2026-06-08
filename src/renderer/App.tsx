@@ -47,6 +47,7 @@ import {
   type HostInfo,
   type Task,
   type TaskScreenshot,
+  type TaskViewState,
   type TaskVersion,
   type UserProfile
 } from "../shared/types";
@@ -89,14 +90,6 @@ const trashDateFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
   minute: "2-digit"
 });
-
-interface CompactTaskSnapshot {
-  id: string;
-  title: string;
-  description: string;
-  priority: number;
-  assigneeId?: string;
-}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -192,57 +185,95 @@ function formatTrashDate(isoDate: string | undefined): string {
   return trashDateFormatter.format(date);
 }
 
-function createCompactTaskSnapshot(tasks: Task[]): Map<string, CompactTaskSnapshot> {
-  return new Map(
-    tasks.map((task) => [
-      task.id,
-      {
-        id: task.id,
-        title: task.title,
-        description: task.description ?? "",
-        priority: getTaskPriority(task),
-        assigneeId: task.assigneeId
-      }
-    ])
-  );
-}
-
 function countMyActiveTasks(tasks: Task[], userId: string): number {
   return tasks.filter((task) => !isTaskInTrash(task) && task.assigneeId === userId).length;
 }
 
-function countCompactTaskChanges(tasks: Task[], snapshot: Map<string, CompactTaskSnapshot> | null, userId: string): number {
-  if (!snapshot) {
-    return 0;
+function getTaskRevision(task: Task): string {
+  return task.updatedAt || task.createdAt || "";
+}
+
+function isTaskRelatedToUser(task: Task, userId: string): boolean {
+  return !isTaskInTrash(task) && task.assigneeId === userId;
+}
+
+function syncTaskViewState(tasks: Task[], userId: string, currentState: TaskViewState | undefined): TaskViewState {
+  const viewedTaskRevisions = { ...(currentState?.viewedTaskRevisions ?? {}) };
+  let changed = !currentState?.initialized;
+
+  tasks.forEach((task) => {
+    if (!isTaskRelatedToUser(task, userId)) {
+      return;
+    }
+
+    const revision = getTaskRevision(task);
+    if (!revision) {
+      return;
+    }
+
+    if (!currentState?.initialized || task.lastUpdatedById === userId) {
+      if (viewedTaskRevisions[task.id] !== revision) {
+        viewedTaskRevisions[task.id] = revision;
+        changed = true;
+      }
+    }
+  });
+
+  if (!currentState || changed) {
+    return {
+      initialized: true,
+      viewedTaskRevisions
+    };
   }
 
-  return tasks.reduce((count, task) => {
-    if (isTaskInTrash(task) || task.assigneeId !== userId) {
-      return count;
-    }
+  return currentState;
+}
 
-    const previous = snapshot.get(task.id);
-    if (!previous) {
-      return count + 1;
-    }
+function markTaskViewed(currentState: TaskViewState | undefined, task: Task): TaskViewState {
+  const revision = getTaskRevision(task);
+  if (!revision) {
+    return currentState ?? { initialized: true, viewedTaskRevisions: {} };
+  }
 
-    if (previous.assigneeId !== userId) {
-      return count + 1;
+  return {
+    initialized: true,
+    viewedTaskRevisions: {
+      ...(currentState?.viewedTaskRevisions ?? {}),
+      [task.id]: revision
     }
+  };
+}
 
-    let nextCount = count;
-    if (previous.title !== task.title) {
-      nextCount += 1;
-    }
-    if (previous.description !== (task.description ?? "")) {
-      nextCount += 1;
-    }
-    if (previous.priority !== getTaskPriority(task)) {
-      nextCount += 1;
-    }
+function areTaskViewStatesEqual(left: TaskViewState | undefined, right: TaskViewState | undefined): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
 
-    return nextCount;
-  }, 0);
+  if (left.initialized !== right.initialized) {
+    return false;
+  }
+
+  return areRecordValuesEqual(left.viewedTaskRevisions, right.viewedTaskRevisions);
+}
+
+function areRecordValuesEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key]);
+}
+
+function hasUnreadTaskChange(task: Task, userId: string, viewState: TaskViewState | undefined): boolean {
+  if (!viewState?.initialized || !isTaskRelatedToUser(task, userId) || !task.lastUpdatedById || task.lastUpdatedById === userId) {
+    return false;
+  }
+
+  const revision = getTaskRevision(task);
+  return Boolean(revision) && viewState.viewedTaskRevisions[task.id] !== revision;
+}
+
+function getUnreadTaskIds(tasks: Task[], userId: string, viewState: TaskViewState | undefined): Set<string> {
+  return new Set(tasks.filter((task) => hasUnreadTaskChange(task, userId, viewState)).map((task) => task.id));
 }
 
 function formatBadgeCount(count: number): string {
@@ -919,6 +950,7 @@ function AccountView({
 function TaskRow({
   task,
   assignee,
+  hasUnreadChange,
   onToggle,
   onAssignClick,
   onOpenDetail,
@@ -926,6 +958,7 @@ function TaskRow({
 }: {
   task: Task;
   assignee?: UserProfile;
+  hasUnreadChange: boolean;
   onToggle: (task: Task) => void;
   onAssignClick: (task: Task) => void;
   onOpenDetail: (task: Task) => void;
@@ -937,7 +970,8 @@ function TaskRow({
         {task.completed ? <Check size={18} /> : <Circle size={18} />}
       </button>
       <button className="task-title-button" title="打开任务详情" onClick={() => onOpenDetail(task)}>
-        {task.title}
+        <span className="task-title-label">{task.title}</span>
+        {hasUnreadChange ? <span className="task-unread-dot" aria-hidden="true" /> : null}
       </button>
       <button
         className={`assignment-avatar-button ${assignee ? "" : "unassigned"}`}
@@ -1962,8 +1996,10 @@ function TaskApp({
   hostInfo,
   theme,
   pinned,
+  unreadTaskIds,
   onTogglePin,
   onEditProfile,
+  onTaskViewed,
   onThemeChange,
   onMinimize
 }: {
@@ -1973,8 +2009,10 @@ function TaskApp({
   hostInfo: HostInfo | null;
   theme: AppTheme;
   pinned: boolean;
+  unreadTaskIds: Set<string>;
   onTogglePin: () => void;
   onEditProfile: () => void;
+  onTaskViewed: (task: Task) => void;
   onThemeChange: (theme: AppTheme) => Promise<void>;
   onMinimize: () => void;
 }) {
@@ -2227,6 +2265,7 @@ function TaskApp({
   }
 
   async function openTaskDetail(task: Task) {
+    onTaskViewed(task);
     await window.coWorkApi.openTaskDetail(task.id);
   }
 
@@ -2385,6 +2424,7 @@ function TaskApp({
                 key={task.id}
                 task={task}
                 assignee={task.assigneeId ? usersById.get(task.assigneeId) : undefined}
+                hasUnreadChange={unreadTaskIds.has(task.id)}
                 onToggle={(item) => void toggleTask(item)}
                 onAssignClick={(item) => setActiveAssignmentTaskId(item.id)}
                 onOpenDetail={(item) => void openTaskDetail(item)}
@@ -2784,9 +2824,10 @@ export function App() {
   const [editingProfile, setEditingProfile] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [compactMode, setCompactMode] = useState(false);
-  const [compactTaskSnapshot, setCompactTaskSnapshot] = useState<Map<string, CompactTaskSnapshot> | null>(null);
+  const taskViewPatchSerial = useRef(0);
   const currentTheme = getValidTheme(preferences.theme);
   const isTaskMainView = !detailRoute.isDetail && !loading && !compactMode && connected && profile !== null && !editingProfile;
+  const currentTaskViewState = profile ? preferences.taskViewStateByUser?.[profile.id] : undefined;
 
   useEffect(() => {
     const cleanupState = window.coWorkApi.onState((nextState) => {
@@ -2850,6 +2891,17 @@ export function App() {
   }, [profile, state.users]);
 
   useEffect(() => {
+    if (!profile) {
+      return;
+    }
+
+    const nextViewState = syncTaskViewState(state.tasks, profile.id, currentTaskViewState);
+    if (!areTaskViewStatesEqual(currentTaskViewState, nextViewState)) {
+      persistTaskViewState(profile.id, nextViewState);
+    }
+  }, [currentTaskViewState, profile, state.tasks]);
+
+  useEffect(() => {
     if (loading || detailRoute.isDetail || compactMode || isTaskMainView) {
       return;
     }
@@ -2863,15 +2915,53 @@ export function App() {
     setPinned(next);
   }
 
+  function persistTaskViewState(userId: string, nextViewState: TaskViewState) {
+    const patchSerial = taskViewPatchSerial.current + 1;
+    const nextTaskViewStateByUser = {
+      ...(preferences.taskViewStateByUser ?? {}),
+      [userId]: nextViewState
+    };
+
+    taskViewPatchSerial.current = patchSerial;
+    setPreferences((current) => ({
+      ...current,
+      taskViewStateByUser: {
+        ...(current.taskViewStateByUser ?? {}),
+        [userId]: nextViewState
+      }
+    }));
+
+    void window.coWorkApi
+      .patchPreferences({ taskViewStateByUser: nextTaskViewStateByUser })
+      .then((nextPreferences) => {
+        if (taskViewPatchSerial.current === patchSerial) {
+          setPreferences((current) => ({
+            ...current,
+            taskViewStateByUser: nextPreferences.taskViewStateByUser
+          }));
+        }
+      })
+      .catch(() => undefined);
+  }
+
+  function markTaskDetailViewed(task: Task) {
+    if (!profile) {
+      return;
+    }
+
+    const nextViewState = markTaskViewed(currentTaskViewState, task);
+    if (!areTaskViewStatesEqual(currentTaskViewState, nextViewState)) {
+      persistTaskViewState(profile.id, nextViewState);
+    }
+  }
+
   function enterCompactMode() {
-    setCompactTaskSnapshot(createCompactTaskSnapshot(getCurrentVersionTasks(state)));
     setCompactMode(true);
     void window.coWorkApi.minimizeWindow();
   }
 
   async function restoreFromCompactMode() {
     setCompactMode(false);
-    setCompactTaskSnapshot(null);
     await window.coWorkApi.restoreWindow();
   }
 
@@ -2887,6 +2977,13 @@ export function App() {
   }
 
   const compactVersionTasks = useMemo(() => getCurrentVersionTasks(state), [state]);
+  const unreadTaskIds = useMemo(() => {
+    if (!profile) {
+      return new Set<string>();
+    }
+
+    return getUnreadTaskIds(state.tasks, profile.id, currentTaskViewState);
+  }, [currentTaskViewState, profile, state.tasks]);
   const compactMetrics = useMemo(() => {
     if (!profile) {
       return {
@@ -2897,9 +2994,9 @@ export function App() {
 
     return {
       taskCount: countMyActiveTasks(compactVersionTasks, profile.id),
-      changeCount: countCompactTaskChanges(compactVersionTasks, compactTaskSnapshot, profile.id)
+      changeCount: compactVersionTasks.filter((task) => unreadTaskIds.has(task.id)).length
     };
-  }, [compactTaskSnapshot, compactVersionTasks, profile]);
+  }, [compactVersionTasks, profile, unreadTaskIds]);
 
   if (loading) {
     return (
@@ -2971,8 +3068,10 @@ export function App() {
       hostInfo={hostInfo}
       theme={currentTheme}
       pinned={pinned}
+      unreadTaskIds={unreadTaskIds}
       onTogglePin={() => void togglePinned()}
       onEditProfile={() => setEditingProfile(true)}
+      onTaskViewed={markTaskDetailViewed}
       onThemeChange={changeTheme}
       onMinimize={enterCompactMode}
     />

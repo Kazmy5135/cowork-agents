@@ -125,13 +125,15 @@ function normalizeVersion(version: TaskVersion, now: string, fallbackName: strin
 
 function normalizeTask(task: Task, fallbackVersionId: string, validVersionIds: Set<string>): Task {
   const versionId = validVersionIds.has(task.versionId) ? task.versionId : fallbackVersionId;
+  const lastUpdatedById = typeof task.lastUpdatedById === "string" && task.lastUpdatedById.trim() ? task.lastUpdatedById.trim() : undefined;
 
   return {
     ...task,
     versionId,
     description: task.description ?? "",
     screenshots: task.screenshots ?? [],
-    priority: normalizeTaskPriority(task.priority)
+    priority: normalizeTaskPriority(task.priority),
+    lastUpdatedById
   };
 }
 
@@ -392,7 +394,7 @@ export class LanServer {
       }
 
       if (message.type === "version:delete") {
-        await this.deleteVersion(message.versionId);
+        await this.deleteVersion(message.versionId, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
@@ -416,37 +418,44 @@ export class LanServer {
       }
 
       if (message.type === "task:toggle") {
-        await this.toggleTask(message.taskId, message.completed);
+        await this.toggleTask(message.taskId, message.completed, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
 
       if (message.type === "task:assign") {
-        await this.assignTask(message.taskId, message.assigneeId);
+        await this.assignTask(message.taskId, message.assigneeId, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
 
       if (message.type === "task:moveVersion") {
-        await this.moveTaskToVersion(message.taskId, message.versionId);
+        await this.moveTaskToVersion(message.taskId, message.versionId, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
 
       if (message.type === "task:trash") {
-        await this.moveTaskToTrash(message.taskId);
+        await this.moveTaskToTrash(message.taskId, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
 
       if (message.type === "task:restore") {
-        await this.restoreTask(message.taskId);
+        await this.restoreTask(message.taskId, currentUser.id);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
         return;
       }
 
       if (message.type === "task:updateDetails") {
-        await this.updateTaskDetails(message.taskId, message.title, message.description, message.screenshots, message.priority);
+        await this.updateTaskDetails(
+          message.taskId,
+          message.title,
+          message.description,
+          message.screenshots,
+          message.priority,
+          currentUser.id
+        );
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
       }
     } catch (error) {
@@ -596,7 +605,7 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
-  private async deleteVersion(versionId: string): Promise<void> {
+  private async deleteVersion(versionId: string, updatedById: string): Promise<void> {
     const version = this.findVersion(versionId);
     if (this.data.versions.length <= 1) {
       throw new Error("至少需要保留一个版本。");
@@ -612,6 +621,7 @@ export class LanServer {
       if (task.versionId === version.id) {
         task.versionId = defaultVersion.id;
         task.updatedAt = now;
+        task.lastUpdatedById = updatedById;
       }
     });
     this.data.versions = this.data.versions.filter((item) => item.id !== version.id);
@@ -702,6 +712,7 @@ export class LanServer {
       assigneeId: creatorId,
       completed: false,
       priority: 0,
+      lastUpdatedById: creatorId,
       createdAt: now,
       updatedAt: now
     };
@@ -710,7 +721,7 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
-  private async toggleTask(taskId: string, completed: boolean): Promise<void> {
+  private async toggleTask(taskId: string, completed: boolean, updatedById: string): Promise<void> {
     const task = this.findActiveTask(taskId);
     const now = new Date().toISOString();
 
@@ -721,10 +732,11 @@ export class LanServer {
       delete task.completedAt;
     }
     task.updatedAt = now;
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 
-  private async assignTask(taskId: string, assigneeId: string): Promise<void> {
+  private async assignTask(taskId: string, assigneeId: string, updatedById: string): Promise<void> {
     const task = this.findActiveTask(taskId);
 
     if (!this.data.users.some((user) => user.id === assigneeId && isProfileComplete(user))) {
@@ -733,10 +745,11 @@ export class LanServer {
 
     task.assigneeId = assigneeId;
     task.updatedAt = new Date().toISOString();
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 
-  private async moveTaskToVersion(taskId: string, versionId: string): Promise<void> {
+  private async moveTaskToVersion(taskId: string, versionId: string, updatedById: string): Promise<void> {
     const task = this.findActiveTask(taskId);
     const version = this.findVersion(versionId);
 
@@ -746,19 +759,21 @@ export class LanServer {
 
     task.versionId = version.id;
     task.updatedAt = new Date().toISOString();
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 
-  private async moveTaskToTrash(taskId: string): Promise<void> {
+  private async moveTaskToTrash(taskId: string, updatedById: string): Promise<void> {
     const task = this.findActiveTask(taskId);
     const now = new Date().toISOString();
 
     task.trashedAt = now;
     task.updatedAt = now;
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 
-  private async restoreTask(taskId: string): Promise<void> {
+  private async restoreTask(taskId: string, updatedById: string): Promise<void> {
     const task = this.findRetainedTask(taskId);
     const now = new Date().toISOString();
 
@@ -768,6 +783,7 @@ export class LanServer {
 
     delete task.trashedAt;
     task.updatedAt = now;
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 
@@ -776,7 +792,8 @@ export class LanServer {
     title: string,
     description: string,
     screenshots: TaskScreenshot[],
-    priority?: number
+    priority: number | undefined,
+    updatedById: string
   ): Promise<void> {
     const task = this.findRetainedTask(taskId);
 
@@ -790,6 +807,7 @@ export class LanServer {
     task.screenshots = validateScreenshots(screenshots);
     task.priority = priority === undefined ? normalizeTaskPriority(task.priority) : validateTaskPriority(priority);
     task.updatedAt = new Date().toISOString();
+    task.lastUpdatedById = updatedById;
     await this.store.save(this.data);
   }
 

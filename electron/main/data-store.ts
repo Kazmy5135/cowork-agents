@@ -10,6 +10,8 @@ const EMPTY_HOST_DATA: HostData = {
   tasks: []
 };
 const EMPTY_APP_PREFERENCES: AppPreferences = {};
+const MAX_TASK_VIEW_USERS = 32;
+const MAX_VIEWED_TASK_REVISIONS_PER_USER = 2000;
 
 async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
@@ -36,6 +38,7 @@ function sanitizeAppPreferences(preferences: Partial<AppPreferences> | null | un
   const lastJoinAddress = preferences?.lastJoinAddress?.trim();
   const lastAccountId = preferences?.lastAccountId?.trim();
   const theme = preferences?.theme;
+  const taskViewStateByUser = sanitizeTaskViewStateByUser(preferences?.taskViewStateByUser);
 
   if (lastJoinAddress) {
     nextPreferences.lastJoinAddress = lastJoinAddress.slice(0, 128);
@@ -49,11 +52,54 @@ function sanitizeAppPreferences(preferences: Partial<AppPreferences> | null | un
     nextPreferences.theme = theme;
   }
 
+  if (taskViewStateByUser) {
+    nextPreferences.taskViewStateByUser = taskViewStateByUser;
+  }
+
   return nextPreferences;
 }
 
 function isAppTheme(value: unknown): value is AppTheme {
   return typeof value === "string" && APP_THEME_IDS.includes(value as AppTheme);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeTaskViewStateByUser(value: unknown): AppPreferences["taskViewStateByUser"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const nextStates: NonNullable<AppPreferences["taskViewStateByUser"]> = {};
+  const userEntries = Object.entries(value).slice(-MAX_TASK_VIEW_USERS);
+
+  for (const [userId, rawState] of userEntries) {
+    const cleanUserId = userId.trim().slice(0, 32);
+    if (!cleanUserId || !isRecord(rawState)) {
+      continue;
+    }
+
+    const viewedTaskRevisions: Record<string, string> = {};
+    if (isRecord(rawState.viewedTaskRevisions)) {
+      const revisionEntries = Object.entries(rawState.viewedTaskRevisions).slice(-MAX_VIEWED_TASK_REVISIONS_PER_USER);
+      for (const [taskId, revision] of revisionEntries) {
+        const cleanTaskId = taskId.trim().slice(0, 128);
+        const cleanRevision = typeof revision === "string" ? revision.trim().slice(0, 64) : "";
+        if (cleanTaskId && cleanRevision) {
+          viewedTaskRevisions[cleanTaskId] = cleanRevision;
+        }
+      }
+    }
+
+    nextStates[cleanUserId] = {
+      initialized: Boolean(rawState.initialized),
+      viewedTaskRevisions
+    };
+  }
+
+  return Object.keys(nextStates).length > 0 ? nextStates : undefined;
 }
 
 export class HostDataStore {

@@ -969,8 +969,12 @@ select option {
 .task-title-button {
   width: 100%;
   min-width: 0;
+  height: 28px;
+  position: relative;
+  display: flex;
+  align-items: center;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--text-strong);
   background: transparent;
   border: 0;
@@ -979,15 +983,33 @@ select option {
   font-weight: 800;
   line-height: 1.2;
   text-align: left;
+}
+
+.task-title-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-unread-dot {
+  width: 8px;
+  height: 8px;
+  position: absolute;
+  left: -4px;
+  top: 3px;
+  z-index: 1;
+  background: #ff2f3f;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(139, 0, 17, 0.14), 0 2px 4px rgba(139, 0, 17, 0.3);
+  pointer-events: none;
 }
 
 .task-title-button:hover {
   color: var(--accent);
 }
 
-.task-done .task-title-button {
+.task-done .task-title-label {
   text-decoration: line-through;
 }
 
@@ -2554,6 +2576,11 @@ select option {
 
 :root[data-theme="field-terminal"] .compact-badge-danger {
   background: #ff4a4a;
+}
+
+:root[data-theme="field-terminal"] .task-unread-dot {
+  background: #ff4a4a;
+  box-shadow: 0 0 6px rgba(255, 74, 74, 0.52);
 }
 
 :root[data-theme="field-terminal"] .compact-badge-success {

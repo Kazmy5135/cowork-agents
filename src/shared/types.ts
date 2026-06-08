@@ -37,10 +37,16 @@ export interface AccountAuthResult {
   requiresProfileSetup: boolean;
 }
 
+export interface TaskViewState {
+  initialized: boolean;
+  viewedTaskRevisions: Record<string, string>;
+}
+
 export interface AppPreferences {
   lastJoinAddress?: string;
   lastAccountId?: string;
   theme?: AppTheme;
+  taskViewStateByUser?: Record<string, TaskViewState>;
 }
 
 export interface TaskVersion {
@@ -63,6 +69,7 @@ export interface Task {
   priority: number;
   completedAt?: string;
   trashedAt?: string;
+  lastUpdatedById?: string;
   createdAt: string;
   updatedAt: string;
 }
