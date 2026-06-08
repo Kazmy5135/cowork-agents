@@ -13,6 +13,7 @@ import {
   Layers,
   LogIn,
   Loader2,
+  Palette,
   Pencil,
   Pin,
   PinOff,
@@ -31,6 +32,8 @@ import {
 } from "lucide-react";
 import {
   ACCOUNT_ID_LENGTH,
+  APP_THEME_IDS,
+  DEFAULT_APP_THEME,
   MAX_VERSION_NAME_LENGTH,
   MAX_SCREENSHOT_EDGE,
   MAX_TASK_SCREENSHOTS,
@@ -38,6 +41,7 @@ import {
   type AccountAuthResult,
   type AppUpdateState,
   type AppPreferences,
+  type AppTheme,
   type ConnectionStatus,
   type HostData,
   type HostInfo,
@@ -53,6 +57,22 @@ const EMPTY_STATE: HostData = {
   currentVersionId: "",
   tasks: []
 };
+const THEME_OPTIONS: Array<{
+  id: AppTheme;
+  label: string;
+  previewClassName: string;
+}> = [
+  {
+    id: "default",
+    label: "默认",
+    previewClassName: "theme-preview-default"
+  },
+  {
+    id: "field-terminal",
+    label: "野外终端",
+    previewClassName: "theme-preview-field-terminal"
+  }
+];
 const EMPTY_UPDATE_STATE: AppUpdateState = {
   phase: "idle",
   currentVersion: ""
@@ -79,6 +99,10 @@ interface CompactTaskSnapshot {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function getValidTheme(theme: AppPreferences["theme"]): AppTheme {
+  return APP_THEME_IDS.includes(theme as AppTheme) ? (theme as AppTheme) : DEFAULT_APP_THEME;
 }
 
 function normalizeAccountInput(value: string): string {
@@ -1693,97 +1717,29 @@ function VersionPopover({
 }
 
 function SettingsPanel({
-  trashedTasks,
-  onClose,
-  onOpenTask,
-  onRestoreTask
-}: {
-  trashedTasks: Task[];
-  onClose: () => void;
-  onOpenTask: (task: Task) => Promise<void>;
-  onRestoreTask: (task: Task) => Promise<void>;
-}) {
-  const sortedTrashedTasks = useMemo(
-    () =>
-      [...trashedTasks].sort((left, right) => {
-        return Date.parse(right.trashedAt ?? right.updatedAt) - Date.parse(left.trashedAt ?? left.updatedAt);
-      }),
-    [trashedTasks]
-  );
-
-  return (
-    <div className="settings-panel" role="dialog" aria-label="基础设置">
-      <aside className="settings-sidebar">
-        <div className="settings-title">基础设置</div>
-        <button className="settings-nav-item selected" type="button" aria-pressed="true">
-          <Trash2 size={15} />
-          <span>垃圾桶</span>
-        </button>
-      </aside>
-
-      <section className="settings-content">
-        <header className="settings-content-header">
-          <div>
-            <p>垃圾桶</p>
-            <span>{TRASH_RETENTION_DAYS} 天后永久清除</span>
-          </div>
-          <button className="icon-button" title="关闭设置" onClick={onClose}>
-            <X size={15} />
-          </button>
-        </header>
-
-        {sortedTrashedTasks.length === 0 ? (
-          <div className="trash-empty">14 天内没有移入垃圾桶的任务</div>
-        ) : (
-          <div className="trash-list">
-            {sortedTrashedTasks.map((task) => {
-              const daysLeft = getTrashDaysLeft(task);
-              return (
-                <article key={task.id} className="trash-item">
-                  <button className="trash-item-main" type="button" title="打开任务详情" onClick={() => void onOpenTask(task)}>
-                    <h3>{task.title}</h3>
-                    <p>移入时间 {formatTrashDate(task.trashedAt)}</p>
-                  </button>
-                  <button
-                    className="trash-restore-button"
-                    type="button"
-                    title="恢复任务"
-                    aria-label={`恢复任务 ${task.title}`}
-                    onClick={() => void onRestoreTask(task)}
-                  >
-                    <span className="trash-restore-label trash-restore-label-expiry">
-                      {daysLeft > 0 ? `${daysLeft} 天后清除` : "即将清除"}
-                    </span>
-                    <span className="trash-restore-label trash-restore-label-action">恢复</span>
-                  </button>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function SettingsPanelWithUpdates({
+  theme,
   trashedTasks,
   updateState,
   onClose,
   onCheckForUpdates,
   onInstallUpdate,
+  onThemeChange,
   onOpenTask,
   onRestoreTask
 }: {
+  theme: AppTheme;
   trashedTasks: Task[];
   updateState: AppUpdateState;
   onClose: () => void;
   onCheckForUpdates: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
+  onThemeChange: (theme: AppTheme) => Promise<void>;
   onOpenTask: (task: Task) => Promise<void>;
   onRestoreTask: (task: Task) => Promise<void>;
 }) {
-  const [activeSection, setActiveSection] = useState<"updates" | "trash">("updates");
+  const [activeSection, setActiveSection] = useState<"updates" | "trash" | "theme">("updates");
+  const [themeSaving, setThemeSaving] = useState<AppTheme | null>(null);
+  const [themeError, setThemeError] = useState("");
   const sortedTrashedTasks = useMemo(
     () =>
       [...trashedTasks].sort((left, right) => {
@@ -1794,9 +1750,14 @@ function SettingsPanelWithUpdates({
   const updateProgress = Math.max(0, Math.min(100, updateState.percent ?? 0));
   const updateIsBusy = updateState.phase === "checking" || updateState.phase === "downloading";
   const updateMessage = getUpdateMessage(updateState);
-  const activeTitle = activeSection === "updates" ? "应用更新" : "垃圾桶";
+  const activeTheme = THEME_OPTIONS.find((option) => option.id === theme) ?? THEME_OPTIONS[0];
+  const activeTitle = activeSection === "updates" ? "应用更新" : activeSection === "theme" ? "主题" : "垃圾桶";
   const activeSubtitle =
-    activeSection === "updates" ? `当前版本 ${updateState.currentVersion || "未知"}` : `${TRASH_RETENTION_DAYS} 天后永久清除`;
+    activeSection === "updates"
+      ? `当前版本 ${updateState.currentVersion || "未知"}`
+      : activeSection === "theme"
+        ? `当前：${activeTheme.label}`
+        : `${TRASH_RETENTION_DAYS} 天后永久清除`;
 
   async function handleUpdateAction() {
     if (updateState.phase === "downloaded") {
@@ -1805,6 +1766,22 @@ function SettingsPanelWithUpdates({
     }
 
     await onCheckForUpdates();
+  }
+
+  async function handleThemeChange(nextTheme: AppTheme) {
+    if (nextTheme === theme || themeSaving) {
+      return;
+    }
+
+    setThemeSaving(nextTheme);
+    setThemeError("");
+    try {
+      await onThemeChange(nextTheme);
+    } catch (saveError) {
+      setThemeError(saveError instanceof Error ? saveError.message : "保存主题失败。");
+    } finally {
+      setThemeSaving(null);
+    }
   }
 
   return (
@@ -1821,13 +1798,22 @@ function SettingsPanelWithUpdates({
           <span>应用更新</span>
         </button>
         <button
-          className={`settings-nav-item${activeSection === "trash" ? " selected" : ""}`}
+          className={`settings-nav-item ${activeSection === "trash" ? "selected" : ""}`}
           type="button"
           aria-pressed={activeSection === "trash"}
           onClick={() => setActiveSection("trash")}
         >
           <Trash2 size={15} />
           <span>垃圾桶</span>
+        </button>
+        <button
+          className={`settings-nav-item ${activeSection === "theme" ? "selected" : ""}`}
+          type="button"
+          aria-pressed={activeSection === "theme"}
+          onClick={() => setActiveSection("theme")}
+        >
+          <Palette size={15} />
+          <span>主题</span>
         </button>
       </aside>
 
@@ -1888,6 +1874,35 @@ function SettingsPanelWithUpdates({
             </button>
             <p className="muted-text update-footnote">通过 GitHub Releases 获取安装包。旧 portable 版需要先手动安装一次新版安装包。</p>
           </div>
+        ) : activeSection === "theme" ? (
+          <div className="theme-settings">
+            <div className="theme-option-list" role="radiogroup" aria-label="主题">
+              {THEME_OPTIONS.map((option) => {
+                const selected = option.id === theme;
+                const saving = themeSaving === option.id;
+
+                return (
+                  <button
+                    key={option.id}
+                    className={`theme-option ${selected ? "selected" : ""}`}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={Boolean(themeSaving)}
+                    onClick={() => void handleThemeChange(option.id)}
+                  >
+                    <span className={`theme-preview ${option.previewClassName}`} aria-hidden="true">
+                      <span />
+                      <span />
+                    </span>
+                    <span>{option.label}</span>
+                    {saving ? <Loader2 className="spin" size={14} /> : selected ? <Check size={14} /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {themeError ? <div className="theme-error">{themeError}</div> : null}
+          </div>
         ) : sortedTrashedTasks.length === 0 ? (
           <div className="trash-empty">14 天内没有移入垃圾桶的任务</div>
         ) : (
@@ -1927,18 +1942,22 @@ function TaskApp({
   state,
   status,
   hostInfo,
+  theme,
   pinned,
   onTogglePin,
   onEditProfile,
+  onThemeChange,
   onMinimize
 }: {
   profile: UserProfile;
   state: HostData;
   status: ConnectionStatus;
   hostInfo: HostInfo | null;
+  theme: AppTheme;
   pinned: boolean;
   onTogglePin: () => void;
   onEditProfile: () => void;
+  onThemeChange: (theme: AppTheme) => Promise<void>;
   onMinimize: () => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -2366,12 +2385,14 @@ function TaskApp({
         ) : null}
 
         {settingsOpen ? (
-          <SettingsPanelWithUpdates
+          <SettingsPanel
+            theme={theme}
             trashedTasks={trashedTasks}
             updateState={updateState}
             onClose={() => setSettingsOpen(false)}
             onCheckForUpdates={checkForUpdates}
             onInstallUpdate={installUpdate}
+            onThemeChange={onThemeChange}
             onOpenTask={openTaskDetail}
             onRestoreTask={restoreTask}
           />
@@ -2703,6 +2724,7 @@ export function App() {
   const [pinned, setPinned] = useState(true);
   const [compactMode, setCompactMode] = useState(false);
   const [compactTaskSnapshot, setCompactTaskSnapshot] = useState<Map<string, CompactTaskSnapshot> | null>(null);
+  const currentTheme = getValidTheme(preferences.theme);
   const isTaskMainView = !detailRoute.isDetail && !loading && !compactMode && connected && profile !== null && !editingProfile;
 
   useEffect(() => {
@@ -2737,6 +2759,14 @@ export function App() {
       cleanupCompactMode();
     };
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = currentTheme;
+
+    return () => {
+      delete document.documentElement.dataset.theme;
+    };
+  }, [currentTheme]);
 
   useEffect(() => {
     if (!profile) {
@@ -2788,6 +2818,11 @@ export function App() {
     setPreferences((current) => ({ ...current, lastAccountId: result.profile.id }));
     setProfile(result.profile);
     setEditingProfile(result.requiresProfileSetup);
+  }
+
+  async function changeTheme(theme: AppTheme) {
+    const nextPreferences = await window.coWorkApi.patchPreferences({ theme });
+    setPreferences(nextPreferences);
   }
 
   const compactVersionTasks = useMemo(() => getCurrentVersionTasks(state), [state]);
@@ -2873,9 +2908,11 @@ export function App() {
       state={state}
       status={status}
       hostInfo={hostInfo}
+      theme={currentTheme}
       pinned={pinned}
       onTogglePin={() => void togglePinned()}
       onEditProfile={() => setEditingProfile(true)}
+      onThemeChange={changeTheme}
       onMinimize={enterCompactMode}
     />
   );

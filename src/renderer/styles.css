@@ -1,4 +1,5 @@
-:root {
+:root,
+:root[data-theme="default"] {
   --text: #172234;
   --text-strong: #071424;
   --text-soft: #516176;
@@ -1467,7 +1468,7 @@ select option {
 
 .settings-sidebar {
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  grid-auto-rows: max-content;
   gap: 8px;
   min-width: 0;
   padding: 10px 7px;
@@ -1557,25 +1558,60 @@ select option {
   font-weight: 750;
 }
 
-.update-panel-content {
+.update-panel-content,
+.theme-settings {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
-  gap: 10px;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-.update-status {
+.update-panel-content {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 10px;
+}
+
+.theme-settings {
+  align-content: start;
+  gap: 8px;
+}
+
+.theme-option-list {
   display: grid;
-  align-content: center;
-  gap: 12px;
-  min-height: 0;
-  padding: 14px;
+  gap: 8px;
+}
+
+.update-status,
+.theme-option {
+  display: grid;
+  color: var(--text);
   background: var(--raised-glass);
   border: 1px solid var(--stroke-raised);
   border-radius: var(--radius-control);
   box-shadow: var(--shadow-control);
+}
+
+.update-status {
+  align-content: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+}
+
+.theme-option {
+  height: 48px;
+  grid-template-columns: 54px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 850;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .update-version-grid {
@@ -1664,6 +1700,88 @@ select option {
   text-align: center;
 }
 
+.theme-option:hover,
+.theme-option.selected {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--stroke-strong);
+  transform: translateY(-1px);
+}
+
+.theme-option.selected {
+  box-shadow:
+    0 0 0 2px rgba(19, 119, 255, 0.1),
+    var(--shadow-control);
+}
+
+.theme-option > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-preview {
+  width: 54px;
+  height: 30px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 4px;
+  padding: 5px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(236, 247, 255, 0.58)),
+    var(--surface);
+  border: 1px solid var(--stroke-raised);
+  border-radius: 7px;
+  box-shadow: var(--highlight);
+}
+
+.theme-preview span {
+  display: block;
+  min-width: 0;
+  border-radius: 5px;
+}
+
+.theme-preview span:first-child {
+  background: linear-gradient(135deg, #8ee7ff, #ffe28a 55%, #ff9aa8);
+}
+
+.theme-preview span:last-child {
+  background: linear-gradient(145deg, #1a83ff, #00aaa7);
+}
+
+.theme-preview-field-terminal {
+  background: #06140b;
+  border-color: rgba(21, 255, 82, 0.42);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(21, 255, 82, 0.18),
+    inset 0 0 14px rgba(21, 255, 82, 0.07);
+}
+
+.theme-preview-field-terminal span {
+  border-radius: 2px;
+}
+
+.theme-preview-field-terminal span:first-child {
+  background: rgba(21, 255, 82, 0.08);
+  border: 1px solid rgba(21, 255, 82, 0.34);
+}
+
+.theme-preview-field-terminal span:last-child {
+  background: #15ff52;
+  box-shadow: 0 0 10px rgba(21, 255, 82, 0.34);
+}
+
+.theme-error {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 @media (max-height: 300px) {
   .settings-panel {
     grid-template-columns: 104px minmax(0, 1fr);
@@ -1699,10 +1817,26 @@ select option {
     gap: 5px;
   }
 
+  .theme-settings {
+    gap: 5px;
+  }
+
   .update-status {
     align-content: start;
     gap: 5px;
     padding: 8px;
+  }
+
+  .theme-option {
+    height: 40px;
+    grid-template-columns: 48px minmax(0, 1fr) 16px;
+    gap: 7px;
+    padding: 5px 7px;
+  }
+
+  .theme-preview {
+    width: 48px;
+    height: 26px;
   }
 
   .update-version-grid {
@@ -2280,6 +2414,464 @@ select option {
 
 .spin {
   animation: spin 0.9s linear infinite;
+}
+
+:root[data-theme="field-terminal"] {
+  --text: #9cffb1;
+  --text-strong: #d7ffe0;
+  --text-soft: #66d886;
+  --text-muted: #3f935a;
+  --surface: #020604;
+  --surface-strong: #06140b;
+  --surface-soft: #0a1d10;
+  --surface-faint: rgba(21, 255, 82, 0.06);
+  --surface-hover: rgba(21, 255, 82, 0.12);
+  --base-glass: rgba(21, 255, 82, 0.035);
+  --raised-glass: rgba(21, 255, 82, 0.05);
+  --raised-glass-soft: rgba(21, 255, 82, 0.035);
+  --stroke: rgba(21, 255, 82, 0.58);
+  --stroke-soft: rgba(21, 255, 82, 0.28);
+  --stroke-raised: rgba(21, 255, 82, 0.42);
+  --stroke-strong: rgba(156, 255, 177, 0.78);
+  --shell-outline: rgba(21, 255, 82, 0.82);
+  --shell-outline-inner: rgba(156, 255, 177, 0.22);
+  --shadow-panel:
+    0 0 0 2px rgba(21, 255, 82, 0.28),
+    0 0 24px rgba(21, 255, 82, 0.18),
+    0 24px 52px rgba(0, 0, 0, 0.42);
+  --shadow-control:
+    0 0 0 1px rgba(21, 255, 82, 0.16),
+    inset 0 0 14px rgba(21, 255, 82, 0.045);
+  --shadow-raised:
+    0 0 0 1px rgba(21, 255, 82, 0.18),
+    inset 0 0 18px rgba(21, 255, 82, 0.055);
+  --highlight: inset 0 0 0 1px rgba(156, 255, 177, 0.08);
+  --accent: #15ff52;
+  --accent-soft: rgba(21, 255, 82, 0.16);
+  --teal: #00cfff;
+  --teal-soft: rgba(0, 207, 255, 0.12);
+  --success: #15ff52;
+  --danger: #ff4a4a;
+  --danger-soft: rgba(255, 74, 74, 0.14);
+  --radius-shell: 4px;
+  --radius-panel: 3px;
+  --radius-control: 2px;
+  --blur: none;
+}
+
+:root[data-theme="field-terminal"] body {
+  color: var(--text);
+}
+
+:root[data-theme="field-terminal"] body,
+:root[data-theme="field-terminal"] button,
+:root[data-theme="field-terminal"] input,
+:root[data-theme="field-terminal"] select,
+:root[data-theme="field-terminal"] textarea {
+  font-family:
+    "Share Tech Mono",
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    Consolas,
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    monospace;
+}
+
+:root[data-theme="field-terminal"] .app-panel,
+:root[data-theme="field-terminal"] .detail-window {
+  color: var(--text);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(21, 255, 82, 0.08), transparent 48%),
+    linear-gradient(180deg, rgba(21, 255, 82, 0.06), transparent 30%),
+    #020604;
+  border: 2px solid var(--shell-outline);
+  border-radius: var(--radius-shell);
+  outline: 2px solid var(--shell-outline-inner);
+  outline-offset: -5px;
+  box-shadow: var(--shadow-panel), var(--highlight);
+  clip-path: inset(0 round var(--radius-shell));
+}
+
+:root[data-theme="field-terminal"] .app-panel::before,
+:root[data-theme="field-terminal"] .detail-window::before {
+  background:
+    radial-gradient(circle at 50% 40%, transparent 0 55%, rgba(0, 0, 0, 0.38) 100%),
+    linear-gradient(180deg, rgba(156, 255, 177, 0.08), transparent 26%);
+  opacity: 1;
+}
+
+:root[data-theme="field-terminal"] .app-panel::after,
+:root[data-theme="field-terminal"] .detail-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(156, 255, 177, 0.075) 0,
+      rgba(156, 255, 177, 0.075) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+  mix-blend-mode: screen;
+  opacity: 0.2;
+}
+
+:root[data-theme="field-terminal"] .app-panel > *,
+:root[data-theme="field-terminal"] .detail-window > * {
+  z-index: 3;
+}
+
+:root[data-theme="field-terminal"] .compact-icon,
+:root[data-theme="field-terminal"] .compact-panel {
+  font-family:
+    "Share Tech Mono",
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    Consolas,
+    "Microsoft YaHei UI",
+    monospace;
+}
+
+:root[data-theme="field-terminal"] .compact-avatar-face {
+  color: var(--text-strong);
+  background: #06140b;
+  border-color: var(--stroke);
+  box-shadow: inset 0 0 14px rgba(21, 255, 82, 0.1), 0 0 14px rgba(21, 255, 82, 0.16);
+}
+
+:root[data-theme="field-terminal"] .compact-name {
+  color: var(--text-strong);
+  text-shadow: 0 0 6px rgba(21, 255, 82, 0.42);
+}
+
+:root[data-theme="field-terminal"] .compact-badge-danger {
+  background: #ff4a4a;
+}
+
+:root[data-theme="field-terminal"] .compact-badge-success {
+  color: #020604;
+  background: var(--accent);
+}
+
+:root[data-theme="field-terminal"] .drag-bar,
+:root[data-theme="field-terminal"] .detail-header p,
+:root[data-theme="field-terminal"] .detail-field span,
+:root[data-theme="field-terminal"] .detail-section-title span {
+  color: var(--text-soft);
+  text-shadow: 0 0 6px rgba(21, 255, 82, 0.22);
+}
+
+:root[data-theme="field-terminal"] .task-panel {
+  padding: 12px;
+}
+
+:root[data-theme="field-terminal"] .task-surface,
+:root[data-theme="field-terminal"] .detail-screenshot-block {
+  background: rgba(4, 12, 7, 0.94);
+  border: 2px solid var(--stroke-raised);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-raised);
+}
+
+:root[data-theme="field-terminal"] .icon-button,
+:root[data-theme="field-terminal"] .secondary-button,
+:root[data-theme="field-terminal"] .scope-button,
+:root[data-theme="field-terminal"] .version-button,
+:root[data-theme="field-terminal"] .task-row,
+:root[data-theme="field-terminal"] .assignment-user-option,
+:root[data-theme="field-terminal"] .version-item,
+:root[data-theme="field-terminal"] .trash-item,
+:root[data-theme="field-terminal"] .theme-option,
+:root[data-theme="field-terminal"] .screenshot-card {
+  color: var(--text);
+  background: rgba(21, 255, 82, 0.045);
+  border-color: var(--stroke-soft);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .icon-button:hover,
+:root[data-theme="field-terminal"] .secondary-button:hover,
+:root[data-theme="field-terminal"] .scope-button:hover,
+:root[data-theme="field-terminal"] .version-button:hover,
+:root[data-theme="field-terminal"] .version-button.active,
+:root[data-theme="field-terminal"] .assignment-user-option:hover,
+:root[data-theme="field-terminal"] .assignment-user-option.selected,
+:root[data-theme="field-terminal"] .theme-option:hover,
+:root[data-theme="field-terminal"] .theme-option.selected {
+  color: var(--text-strong);
+  background: rgba(21, 255, 82, 0.1);
+  border-color: var(--stroke);
+  transform: translateY(-1px);
+}
+
+:root[data-theme="field-terminal"] .icon-button.solid,
+:root[data-theme="field-terminal"] .primary-button,
+:root[data-theme="field-terminal"] .connect-action,
+:root[data-theme="field-terminal"] .add-task-button,
+:root[data-theme="field-terminal"] .scope-button[aria-pressed="true"],
+:root[data-theme="field-terminal"] .settings-nav-item.selected,
+:root[data-theme="field-terminal"] .trash-restore-button:hover,
+:root[data-theme="field-terminal"] .restore-button {
+  color: #020604;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 18px rgba(21, 255, 82, 0.26), var(--highlight);
+  text-shadow: none;
+}
+
+:root[data-theme="field-terminal"] .icon-button.danger:hover {
+  color: #020604;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+:root[data-theme="field-terminal"] input,
+:root[data-theme="field-terminal"] select,
+:root[data-theme="field-terminal"] textarea {
+  color: var(--text-strong);
+  background: rgba(21, 255, 82, 0.035);
+  border-color: var(--stroke-soft);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-control);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-theme="field-terminal"] input::placeholder,
+:root[data-theme="field-terminal"] textarea::placeholder {
+  color: rgba(156, 255, 177, 0.42);
+}
+
+:root[data-theme="field-terminal"] input:focus,
+:root[data-theme="field-terminal"] select:focus,
+:root[data-theme="field-terminal"] textarea:focus {
+  background: rgba(21, 255, 82, 0.055);
+  border-color: var(--stroke);
+  box-shadow:
+    0 0 0 2px rgba(21, 255, 82, 0.18),
+    var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .avatar {
+  color: var(--text-strong);
+  background:
+    linear-gradient(180deg, rgba(156, 255, 177, 0.12), rgba(21, 255, 82, 0.04)),
+    #06140b;
+  border-color: var(--stroke);
+  box-shadow: inset 0 0 16px rgba(21, 255, 82, 0.08);
+}
+
+:root[data-theme="field-terminal"] .current-user span,
+:root[data-theme="field-terminal"] .task-title-button,
+:root[data-theme="field-terminal"] .settings-title,
+:root[data-theme="field-terminal"] .settings-content-header p,
+:root[data-theme="field-terminal"] .version-popover-header p,
+:root[data-theme="field-terminal"] .detail-header h1,
+:root[data-theme="field-terminal"] .detail-user-card strong,
+:root[data-theme="field-terminal"] .trash-item h3,
+:root[data-theme="field-terminal"] .version-main span,
+:root[data-theme="field-terminal"] .version-preview-main span {
+  color: var(--text-strong);
+}
+
+:root[data-theme="field-terminal"] .task-title-button,
+:root[data-theme="field-terminal"] .status-pill,
+:root[data-theme="field-terminal"] .version-button {
+  text-shadow: 0 0 6px rgba(21, 255, 82, 0.28);
+}
+
+:root[data-theme="field-terminal"] .task-title-button:hover,
+:root[data-theme="field-terminal"] .version-main:hover span,
+:root[data-theme="field-terminal"] .trash-item-main:hover h3,
+:root[data-theme="field-terminal"] .avatar-picker:hover {
+  color: var(--accent);
+}
+
+:root[data-theme="field-terminal"] .task-row.task-done {
+  opacity: 0.52;
+}
+
+:root[data-theme="field-terminal"] .task-check {
+  color: var(--accent);
+}
+
+:root[data-theme="field-terminal"] .task-check:hover {
+  background: rgba(21, 255, 82, 0.1);
+}
+
+:root[data-theme="field-terminal"] .assignment-avatar-button.unassigned {
+  color: var(--accent);
+  background: rgba(21, 255, 82, 0.055);
+  border-color: var(--stroke-soft);
+  box-shadow: var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .status-pill,
+:root[data-theme="field-terminal"] .status-pill:hover,
+:root[data-theme="field-terminal"] .status-pill-copied {
+  color: #020604;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 14px rgba(21, 255, 82, 0.24);
+}
+
+:root[data-theme="field-terminal"] .task-list::-webkit-scrollbar-track,
+:root[data-theme="field-terminal"] .assignment-user-strip::-webkit-scrollbar-track,
+:root[data-theme="field-terminal"] .version-list::-webkit-scrollbar-track,
+:root[data-theme="field-terminal"] .screenshot-grid::-webkit-scrollbar-track,
+:root[data-theme="field-terminal"] .trash-list::-webkit-scrollbar-track {
+  background: rgba(21, 255, 82, 0.05);
+}
+
+:root[data-theme="field-terminal"] .task-list::-webkit-scrollbar-thumb,
+:root[data-theme="field-terminal"] .assignment-user-strip::-webkit-scrollbar-thumb,
+:root[data-theme="field-terminal"] .version-list::-webkit-scrollbar-thumb,
+:root[data-theme="field-terminal"] .screenshot-grid::-webkit-scrollbar-thumb,
+:root[data-theme="field-terminal"] .trash-list::-webkit-scrollbar-thumb {
+  background: rgba(21, 255, 82, 0.3);
+}
+
+:root[data-theme="field-terminal"] .assignment-backdrop,
+:root[data-theme="field-terminal"] .version-backdrop,
+:root[data-theme="field-terminal"] .image-preview-backdrop {
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-theme="field-terminal"] .assignment-popover,
+:root[data-theme="field-terminal"] .version-popover,
+:root[data-theme="field-terminal"] .task-context-menu,
+:root[data-theme="field-terminal"] .task-version-submenu,
+:root[data-theme="field-terminal"] .settings-panel,
+:root[data-theme="field-terminal"] .image-preview-panel {
+  color: var(--text);
+  background: rgba(4, 12, 7, 0.96);
+  border: 2px solid var(--stroke-raised);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel), var(--highlight);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-theme="field-terminal"] .settings-panel {
+  border-top-color: var(--stroke-soft);
+}
+
+:root[data-theme="field-terminal"] .settings-sidebar,
+:root[data-theme="field-terminal"] .detail-header,
+:root[data-theme="field-terminal"] .detail-footer {
+  background: rgba(21, 255, 82, 0.025);
+  border-color: var(--stroke-soft);
+  box-shadow: none;
+}
+
+:root[data-theme="field-terminal"] .settings-nav-item {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
+:root[data-theme="field-terminal"] .settings-nav-item strong {
+  background: rgba(2, 6, 4, 0.22);
+}
+
+:root[data-theme="field-terminal"] .theme-option.selected {
+  box-shadow:
+    0 0 0 2px rgba(21, 255, 82, 0.14),
+    var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .trash-empty,
+:root[data-theme="field-terminal"] .screenshot-empty {
+  color: var(--text-muted);
+  background: rgba(21, 255, 82, 0.035);
+  border-color: var(--stroke-soft);
+}
+
+:root[data-theme="field-terminal"] .trash-restore-button {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(255, 74, 74, 0.24);
+}
+
+:root[data-theme="field-terminal"] .task-menu-item:hover {
+  background: var(--accent-soft);
+}
+
+:root[data-theme="field-terminal"] .task-menu-item.danger {
+  color: var(--danger);
+}
+
+:root[data-theme="field-terminal"] .task-menu-item.danger:hover {
+  background: var(--danger-soft);
+}
+
+:root[data-theme="field-terminal"] .version-item.selected {
+  border-color: var(--stroke);
+  box-shadow:
+    0 0 0 2px rgba(21, 255, 82, 0.12),
+    var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .version-item.dragging {
+  background: rgba(21, 255, 82, 0.08);
+  border-color: var(--stroke);
+}
+
+:root[data-theme="field-terminal"] .version-drag-preview {
+  color: var(--text);
+  background: rgba(4, 12, 7, 0.98);
+  border-color: var(--stroke);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-theme="field-terminal"] .floating-error {
+  color: #ffd9de;
+  background: rgba(255, 74, 74, 0.16);
+  border-color: rgba(255, 74, 74, 0.34);
+  box-shadow: var(--shadow-control);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-theme="field-terminal"] .error-text,
+:root[data-theme="field-terminal"] .version-error,
+:root[data-theme="field-terminal"] .theme-error {
+  color: var(--danger);
+}
+
+:root[data-theme="field-terminal"] .success-text {
+  color: var(--success);
+}
+
+:root[data-theme="field-terminal"] .detail-user-card,
+:root[data-theme="field-terminal"] .paste-hint {
+  background: rgba(21, 255, 82, 0.035);
+  border-color: var(--stroke-soft);
+  box-shadow: var(--shadow-control);
+}
+
+:root[data-theme="field-terminal"] .screenshot-preview-button {
+  background: rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme="field-terminal"] .image-preview-panel img,
+:root[data-theme="field-terminal"] .screenshot-preview-button img {
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="field-terminal"] .app-panel::after,
+  :root[data-theme="field-terminal"] .detail-window::after {
+    opacity: 0.14;
+  }
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {

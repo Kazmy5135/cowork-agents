@@ -5,6 +5,9 @@ export const TRASH_RETENTION_DAYS = 14;
 export const ACCOUNT_ID_LENGTH = 11;
 export const DEFAULT_VERSION_NAME = "默认版本";
 export const MAX_VERSION_NAME_LENGTH = 24;
+export const APP_THEME_IDS = ["default", "field-terminal"] as const;
+export type AppTheme = (typeof APP_THEME_IDS)[number];
+export const DEFAULT_APP_THEME: AppTheme = "default";
 
 export interface TaskScreenshot {
   id: string;
@@ -37,6 +40,7 @@ export interface AccountAuthResult {
 export interface AppPreferences {
   lastJoinAddress?: string;
   lastAccountId?: string;
+  theme?: AppTheme;
 }
 
 export interface TaskVersion {
