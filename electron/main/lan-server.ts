@@ -26,6 +26,18 @@ const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * MS_PER_DAY;
 const TRASH_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_VERSION_ID = "default-version";
 
+function normalizeTaskPriority(priority: unknown, fallback = 0): number {
+  return typeof priority === "number" && Number.isSafeInteger(priority) && priority >= 0 ? priority : fallback;
+}
+
+function validateTaskPriority(priority: number): number {
+  if (!Number.isSafeInteger(priority) || priority < 0) {
+    throw new Error("任务优先级必须是非负整数。");
+  }
+
+  return priority;
+}
+
 function getLanAddresses(port: number): string[] {
   const interfaces = networkInterfaces();
   const addresses: string[] = [];
@@ -118,7 +130,8 @@ function normalizeTask(task: Task, fallbackVersionId: string, validVersionIds: S
     ...task,
     versionId,
     description: task.description ?? "",
-    screenshots: task.screenshots ?? []
+    screenshots: task.screenshots ?? [],
+    priority: normalizeTaskPriority(task.priority)
   };
 }
 
@@ -433,7 +446,7 @@ export class LanServer {
       }
 
       if (message.type === "task:updateDetails") {
-        await this.updateTaskDetails(message.taskId, message.title, message.description, message.screenshots);
+        await this.updateTaskDetails(message.taskId, message.title, message.description, message.screenshots, message.priority);
         this.broadcast({ type: "state:update", state: cloneState(this.data) });
       }
     } catch (error) {
@@ -688,6 +701,7 @@ export class LanServer {
       creatorId,
       assigneeId: creatorId,
       completed: false,
+      priority: 0,
       createdAt: now,
       updatedAt: now
     };
@@ -698,9 +712,15 @@ export class LanServer {
 
   private async toggleTask(taskId: string, completed: boolean): Promise<void> {
     const task = this.findActiveTask(taskId);
+    const now = new Date().toISOString();
 
     task.completed = completed;
-    task.updatedAt = new Date().toISOString();
+    if (completed) {
+      task.completedAt = now;
+    } else {
+      delete task.completedAt;
+    }
+    task.updatedAt = now;
     await this.store.save(this.data);
   }
 
@@ -751,7 +771,13 @@ export class LanServer {
     await this.store.save(this.data);
   }
 
-  private async updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): Promise<void> {
+  private async updateTaskDetails(
+    taskId: string,
+    title: string,
+    description: string,
+    screenshots: TaskScreenshot[],
+    priority?: number
+  ): Promise<void> {
     const task = this.findRetainedTask(taskId);
 
     const cleanTitle = title.trim();
@@ -762,6 +788,7 @@ export class LanServer {
     task.title = cleanTitle;
     task.description = description;
     task.screenshots = validateScreenshots(screenshots);
+    task.priority = priority === undefined ? normalizeTaskPriority(task.priority) : validateTaskPriority(priority);
     task.updatedAt = new Date().toISOString();
     await this.store.save(this.data);
   }

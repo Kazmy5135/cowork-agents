@@ -74,6 +74,7 @@ interface CompactTaskSnapshot {
   id: string;
   title: string;
   description: string;
+  priority: number;
   assigneeId?: string;
 }
 
@@ -123,6 +124,19 @@ function isTaskInTrash(task: Task): boolean {
   return Boolean(task.trashedAt);
 }
 
+function getTaskPriority(task: Task): number {
+  return Number.isSafeInteger(task.priority) && task.priority >= 0 ? task.priority : 0;
+}
+
+function parseTaskTime(isoDate: string | undefined): number {
+  const time = Date.parse(isoDate ?? "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function getTaskCompletedSortTime(task: Task): number {
+  return parseTaskTime(task.completedAt) || parseTaskTime(task.updatedAt) || parseTaskTime(task.createdAt);
+}
+
 function isExpiredTrashedTask(task: Task, nowMs = Date.now()): boolean {
   if (!task.trashedAt) {
     return false;
@@ -162,6 +176,7 @@ function createCompactTaskSnapshot(tasks: Task[]): Map<string, CompactTaskSnapsh
         id: task.id,
         title: task.title,
         description: task.description ?? "",
+        priority: getTaskPriority(task),
         assigneeId: task.assigneeId
       }
     ])
@@ -196,6 +211,9 @@ function countCompactTaskChanges(tasks: Task[], snapshot: Map<string, CompactTas
       nextCount += 1;
     }
     if (previous.description !== (task.description ?? "")) {
+      nextCount += 1;
+    }
+    if (previous.priority !== getTaskPriority(task)) {
       nextCount += 1;
     }
 
@@ -1995,7 +2013,22 @@ function TaskApp({
           if (left.completed !== right.completed) {
             return Number(left.completed) - Number(right.completed);
           }
-          return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+
+          if (!left.completed) {
+            const priorityDifference = getTaskPriority(left) - getTaskPriority(right);
+            if (priorityDifference !== 0) {
+              return priorityDifference;
+            }
+
+            return parseTaskTime(left.createdAt) - parseTaskTime(right.createdAt);
+          }
+
+          const completedDifference = getTaskCompletedSortTime(right) - getTaskCompletedSortTime(left);
+          if (completedDifference !== 0) {
+            return completedDifference;
+          }
+
+          return parseTaskTime(left.createdAt) - parseTaskTime(right.createdAt);
         }),
     [currentVersionId, state.tasks]
   );
@@ -2430,6 +2463,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
   const task = useMemo(() => state.tasks.find((item) => item.id === taskId), [state.tasks, taskId]);
   const usersById = useMemo(() => new Map(state.users.map((user) => [user.id, user])), [state.users]);
   const [title, setTitle] = useState("");
+  const [priorityInput, setPriorityInput] = useState("0");
   const [description, setDescription] = useState("");
   const [screenshots, setScreenshots] = useState<TaskScreenshot[]>([]);
   const [error, setError] = useState("");
@@ -2444,6 +2478,7 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
     }
 
     setTitle(task.title);
+    setPriorityInput(String(getTaskPriority(task)));
     setDescription(task.description ?? "");
     setScreenshots(task.screenshots ?? []);
     setError("");
@@ -2493,12 +2528,19 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
       return;
     }
 
+    const cleanPriority = priorityInput.trim();
+    const parsedPriority = Number(cleanPriority);
+    if (!/^\d+$/.test(cleanPriority) || !Number.isSafeInteger(parsedPriority) || parsedPriority < 0) {
+      setError("任务优先级必须是非负整数。");
+      return;
+    }
+
     setSaving(true);
     setError("");
     setSavedMessage("");
 
     try {
-      await window.coWorkApi.updateTaskDetails(task.id, cleanTitle, description, screenshots);
+      await window.coWorkApi.updateTaskDetails(task.id, cleanTitle, description, screenshots, parsedPriority);
       setSavedMessage("已保存");
       await window.coWorkApi.closeWindow();
     } catch (saveError) {
@@ -2580,6 +2622,25 @@ function TaskDetailView({ taskId, state }: { taskId: string | null; state: HostD
         <label className="detail-field">
           <span>任务名字</span>
           <input value={title} maxLength={80} onChange={(event) => setTitle(event.target.value)} />
+        </label>
+
+        <label className="detail-field detail-priority-field">
+          <span>优先级</span>
+          <input
+            value={priorityInput}
+            type="number"
+            min={0}
+            max={Number.MAX_SAFE_INTEGER}
+            step={1}
+            inputMode="numeric"
+            onChange={(event) => {
+              const nextPriority = event.target.value;
+              if (/^\d*$/.test(nextPriority)) {
+                setPriorityInput(nextPriority);
+                setSavedMessage("");
+              }
+            }}
+          />
         </label>
 
         <label className="detail-field detail-description">

@@ -186,8 +186,8 @@ export class LanClient {
     this.send({ type: "task:restore", taskId });
   }
 
-  updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[]): void {
-    this.send({ type: "task:updateDetails", taskId, title, description, screenshots });
+  updateTaskDetails(taskId: string, title: string, description: string, screenshots: TaskScreenshot[], priority: number): void {
+    this.send({ type: "task:updateDetails", taskId, title, description, screenshots, priority });
   }
 
   private handleMessage(raw: string): void {

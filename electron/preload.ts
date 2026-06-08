@@ -41,8 +41,8 @@ contextBridge.exposeInMainWorld("coWorkApi", {
     ipcRenderer.invoke("task:move-version", taskId, versionId) as Promise<void>,
   moveTaskToTrash: (taskId: string) => ipcRenderer.invoke("task:trash", taskId) as Promise<void>,
   restoreTask: (taskId: string) => ipcRenderer.invoke("task:restore", taskId) as Promise<void>,
-  updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) =>
-    ipcRenderer.invoke("task:update-details", taskId, title, description, screenshots) as Promise<void>,
+  updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[], priority: number) =>
+    ipcRenderer.invoke("task:update-details", taskId, title, description, screenshots, priority) as Promise<void>,
   openTaskDetail: (taskId: string) => ipcRenderer.invoke("task:open-detail", taskId) as Promise<void>,
   minimizeWindow: () => ipcRenderer.invoke("window:minimize") as Promise<void>,
   restoreWindow: () => ipcRenderer.invoke("window:restore") as Promise<void>,

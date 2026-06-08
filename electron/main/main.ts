@@ -705,8 +705,8 @@ function registerIpc(): void {
     getClient().restoreTask(taskId);
   });
 
-  ipcMain.handle("task:update-details", (_event, taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) => {
-    getClient().updateTaskDetails(taskId, title, description, screenshots);
+  ipcMain.handle("task:update-details", (_event, taskId: string, title: string, description: string, screenshots: TaskScreenshot[], priority: number) => {
+    getClient().updateTaskDetails(taskId, title, description, screenshots, priority);
   });
 
   ipcMain.handle("task:open-detail", (_event, taskId: string) => {

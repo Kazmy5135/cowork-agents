@@ -37,7 +37,7 @@ declare global {
       moveTaskToVersion: (taskId: string, versionId: string) => Promise<void>;
       moveTaskToTrash: (taskId: string) => Promise<void>;
       restoreTask: (taskId: string) => Promise<void>;
-      updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[]) => Promise<void>;
+      updateTaskDetails: (taskId: string, title: string, description: string, screenshots: TaskScreenshot[], priority: number) => Promise<void>;
       openTaskDetail: (taskId: string) => Promise<void>;
       minimizeWindow: () => Promise<void>;
       restoreWindow: () => Promise<void>;

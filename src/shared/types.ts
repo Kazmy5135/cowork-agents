@@ -56,6 +56,8 @@ export interface Task {
   creatorId?: string;
   assigneeId?: string;
   completed: boolean;
+  priority: number;
+  completedAt?: string;
   trashedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -164,6 +166,7 @@ export type ClientToServerMessage =
       title: string;
       description: string;
       screenshots: TaskScreenshot[];
+      priority?: number;
     };
 
 export type ServerToClientMessage =
