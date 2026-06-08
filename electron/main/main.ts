@@ -1,7 +1,9 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
 import log from "electron-log/main";
 import { autoUpdater, type AppUpdater, type ProgressInfo, type UpdateInfo, type VerifyUpdateCodeSignature } from "electron-updater";
-import { join } from "node:path";
+import { getFileList, parseUpdateInfo, Provider, type ProviderRuntimeOptions } from "electron-updater/out/providers/Provider";
+import type { ResolvedUpdateFileInfo } from "electron-updater/out/types";
+import { join, posix as pathPosix } from "node:path";
 import {
   DEFAULT_PORT,
   type AppUpdateState,
@@ -42,6 +44,108 @@ const COMPACT_WINDOW_SIZE = {
   height: 87
 };
 type MainWindowResizeEdge = "top" | "bottom";
+const UPDATE_REPO_OWNER = "Kazmy5135";
+const UPDATE_REPO_NAME = "cowork-agents";
+const UPDATE_LATEST_RELEASE_API_URL = `https://api.github.com/repos/${UPDATE_REPO_OWNER}/${UPDATE_REPO_NAME}/releases/latest`;
+
+interface GitHubReleaseAsset {
+  name: string;
+  url: string;
+}
+
+interface GitHubReleaseInfo {
+  tag_name: string;
+  html_url?: string;
+  assets: GitHubReleaseAsset[];
+}
+
+type GitHubApiUpdateInfo = ReturnType<typeof parseUpdateInfo> & {
+  assets: GitHubReleaseAsset[];
+  tag?: string;
+};
+
+class GitHubApiUpdateProvider extends Provider<GitHubApiUpdateInfo> {
+  constructor(
+    _options: unknown,
+    private readonly updater: AppUpdater,
+    runtimeOptions: ProviderRuntimeOptions
+  ) {
+    super({
+      ...runtimeOptions,
+      isUseMultipleRangeRequest: false
+    });
+  }
+
+  get fileExtraDownloadHeaders(): Record<string, string> {
+    return {
+      Accept: "application/octet-stream"
+    };
+  }
+
+  async getLatestVersion(): Promise<GitHubApiUpdateInfo> {
+    const releaseInfo = await this.getLatestReleaseInfo();
+    const channelFile = `${this.updater.channel || "latest"}.yml`;
+    const channelAsset = releaseInfo.assets.find((asset) => asset.name === channelFile);
+
+    if (!channelAsset) {
+      throw new Error(`Cannot find ${channelFile} in ${releaseInfo.html_url ?? "latest GitHub release"}.`);
+    }
+
+    const channelUrl = new URL(channelAsset.url);
+    const updateInfo = parseUpdateInfo(
+      await this.httpRequest(channelUrl, this.fileExtraDownloadHeaders),
+      channelFile,
+      channelUrl
+    ) as GitHubApiUpdateInfo;
+
+    updateInfo.assets = releaseInfo.assets;
+    updateInfo.tag = releaseInfo.tag_name;
+    return updateInfo;
+  }
+
+  resolveFiles(updateInfo: GitHubApiUpdateInfo): ResolvedUpdateFileInfo[] {
+    return getFileList(updateInfo).map((fileInfo) => {
+      const assetName = pathPosix.basename(fileInfo.url).replace(/ /g, "-");
+      const asset = updateInfo.assets.find((candidate) => candidate.name === assetName);
+
+      if (!asset) {
+        throw new Error(`Cannot find update asset "${assetName}" in latest GitHub release.`);
+      }
+
+      return {
+        url: new URL(asset.url),
+        info: fileInfo
+      };
+    });
+  }
+
+  private async getLatestReleaseInfo(): Promise<GitHubReleaseInfo> {
+    const rawData = await this.httpRequest(
+      new URL(UPDATE_LATEST_RELEASE_API_URL),
+      {
+        Accept: "application/vnd.github+json"
+      }
+    );
+
+    if (!rawData) {
+      throw new Error("GitHub latest release API returned an empty response.");
+    }
+
+    const releaseInfo = JSON.parse(rawData) as Partial<GitHubReleaseInfo>;
+
+    if (typeof releaseInfo.tag_name !== "string" || !Array.isArray(releaseInfo.assets)) {
+      throw new Error("GitHub latest release API returned invalid release metadata.");
+    }
+
+    return {
+      tag_name: releaseInfo.tag_name,
+      html_url: releaseInfo.html_url,
+      assets: releaseInfo.assets.filter((asset): asset is GitHubReleaseAsset => {
+        return typeof asset?.name === "string" && typeof asset?.url === "string";
+      })
+    };
+  }
+}
 
 function emitState(state: HostData): void {
   latestState = state;
@@ -76,7 +180,7 @@ function getUpdateVersion(info?: UpdateInfo | null): string | undefined {
   return info?.version || undefined;
 }
 
-function getErrorMessage(error: unknown, fallback: string): string {
+function getRawErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -86,6 +190,57 @@ function getErrorMessage(error: unknown, fallback: string): string {
   }
 
   return fallback;
+}
+
+function getUpdateErrorMessage(error: unknown, fallback: string): string {
+  const message = getRawErrorMessage(error, fallback);
+  const normalizedMessage = message.toLowerCase();
+
+  if (normalizedMessage.includes("gateway time-out") || normalizedMessage.includes("gateway timeout") || normalizedMessage.includes("504")) {
+    return "GitHub 更新服务暂时超时，请稍后重试。";
+  }
+
+  if (normalizedMessage.includes("rate limit")) {
+    return "GitHub API 请求次数暂时受限，请稍后重试。";
+  }
+
+  if (
+    normalizedMessage.includes("latest.yml") ||
+    normalizedMessage.includes("channel file") ||
+    normalizedMessage.includes("release artifacts")
+  ) {
+    return "最新 GitHub Release 缺少更新文件，请重新发布安装包。";
+  }
+
+  if (
+    normalizedMessage.includes("unable to find latest version") ||
+    normalizedMessage.includes("no published versions") ||
+    normalizedMessage.includes("404")
+  ) {
+    return "没有找到可用的正式 GitHub Release。";
+  }
+
+  if (
+    normalizedMessage.includes("timed out") ||
+    normalizedMessage.includes("timeout") ||
+    normalizedMessage.includes("enotfound") ||
+    normalizedMessage.includes("econnreset") ||
+    normalizedMessage.includes("econnrefused")
+  ) {
+    return "无法连接 GitHub 更新服务，请检查网络后重试。";
+  }
+
+  return message.length > 160 ? fallback : message;
+}
+
+function configureGitHubApiUpdateProvider(): void {
+  autoUpdater.setFeedURL({
+    provider: "custom",
+    updateProvider: GitHubApiUpdateProvider,
+    requestHeaders: {
+      "User-Agent": `${app.getName()}/${app.getVersion()}`
+    }
+  } as Parameters<typeof autoUpdater.setFeedURL>[0]);
 }
 
 function configureAutoUpdater(): void {
@@ -99,6 +254,8 @@ function configureAutoUpdater(): void {
   autoUpdater.logger = log;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.disableDifferentialDownload = true;
+  configureGitHubApiUpdateProvider();
 
   if (process.platform === "win32") {
     const unsignedUpdater = autoUpdater as AppUpdater & {
@@ -148,10 +305,11 @@ function configureAutoUpdater(): void {
   });
 
   autoUpdater.on("error", (error) => {
+    log.error("Auto update error.", error);
     setUpdateState({
       phase: "error",
       latestVersion: updateState.latestVersion,
-      message: getErrorMessage(error, "检查更新失败。")
+      message: getUpdateErrorMessage(error, "检查更新失败。")
     });
   });
 }
@@ -178,10 +336,11 @@ async function checkForAppUpdates(): Promise<AppUpdateState> {
     await autoUpdater.checkForUpdates();
     return updateState;
   } catch (error) {
+    log.error("Failed to check for app updates.", error);
     return setUpdateState({
       phase: "error",
       latestVersion: updateState.latestVersion,
-      message: getErrorMessage(error, "检查更新失败。")
+      message: getUpdateErrorMessage(error, "检查更新失败。")
     });
   }
 }
