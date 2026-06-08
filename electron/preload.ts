@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AccountAuthResult,
+  AppUpdateState,
   AppPreferences,
   ConnectionStatus,
   HostData,
@@ -16,6 +17,9 @@ contextBridge.exposeInMainWorld("coWorkApi", {
   patchPreferences: (preferences: Partial<AppPreferences>) =>
     ipcRenderer.invoke("preferences:patch", preferences) as Promise<AppPreferences>,
   getLanAddresses: () => ipcRenderer.invoke("network:addresses") as Promise<string[]>,
+  getUpdateState: () => ipcRenderer.invoke("update:get-state") as Promise<AppUpdateState>,
+  checkForUpdates: () => ipcRenderer.invoke("update:check") as Promise<AppUpdateState>,
+  installUpdate: () => ipcRenderer.invoke("update:install") as Promise<void>,
   startHost: () => ipcRenderer.invoke("host:start") as Promise<HostInfo>,
   stopHost: () => ipcRenderer.invoke("host:stop") as Promise<void>,
   joinHost: (address: string) => ipcRenderer.invoke("client:join", address) as Promise<string>,
@@ -67,6 +71,11 @@ contextBridge.exposeInMainWorld("coWorkApi", {
     const handler = (_event: Electron.IpcRendererEvent, info: HostInfo | null) => callback(info);
     ipcRenderer.on("host:info", handler);
     return () => ipcRenderer.removeListener("host:info", handler);
+  },
+  onUpdateState: (callback: (state: AppUpdateState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => callback(state);
+    ipcRenderer.on("update:state", handler);
+    return () => ipcRenderer.removeListener("update:state", handler);
   },
   onCompactMode: (callback: (compact: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, compact: boolean) => callback(compact);

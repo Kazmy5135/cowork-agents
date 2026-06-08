@@ -84,6 +84,23 @@ export interface ConnectionStatus {
   url?: string;
 }
 
+export type AppUpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export interface AppUpdateState {
+  phase: AppUpdatePhase;
+  currentVersion: string;
+  latestVersion?: string;
+  percent?: number;
+  message?: string;
+}
+
 export type ClientToServerMessage =
   | {
       type: "account:login";

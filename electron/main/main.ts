@@ -1,7 +1,10 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, screen, Tray, type NativeImage } from "electron";
+import log from "electron-log/main";
+import { autoUpdater, type AppUpdater, type ProgressInfo, type UpdateInfo, type VerifyUpdateCodeSignature } from "electron-updater";
 import { join } from "node:path";
 import {
   DEFAULT_PORT,
+  type AppUpdateState,
   type AppPreferences,
   type ConnectionStatus,
   type HostData,
@@ -25,6 +28,8 @@ let lanServer: LanServer | null = null;
 let lanClient: LanClient | null = null;
 let currentHostInfo: HostInfo | null = null;
 let latestState: HostData = { users: [], versions: [], currentVersionId: "", tasks: [] };
+let updateState: AppUpdateState = { phase: "idle", currentVersion: app.getVersion() };
+let autoUpdaterConfigured = false;
 const detailWindows = new Map<string, BrowserWindow>();
 const trayIconBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACwElEQVR4nL3XYUsUURQG4PcH7Mf34/yk+SvztSgaKlpUFAcVxURRVDRNTbM1s8zcTFPTdFUURcVBRVFUNiqKohM37uC0zaxjO7v367L77Mw995z3gjcEvPkLvPUTvP0DvPMdtL+Bd7+C976A9z+DDz6BySxYdgGWnxusODNZeWqx6sRm9bFN58hizaHJ2gODdftgvQs27IGNu+DDHbBpG2zeAls2wdYNsG0dbF8DO1YRFTdYdmGz/DzDijNh5amw6kRYfSx0joQ1h8LaA2HdvrDezbBhz2bjrnEVzs4VXIUnmMw6LLsQlp9LBFzYsCds3BU+3BE2bTts3kqE4exaRj7cZDLrFoALm7eELZsuWzfMIJzdSwjDLSazEgMubN0Qtq0L29esXJw9iygVLuxYFXauWH6cvQsIeu3FwoVdy8LuJdPD2TeP3IKLY8/z4cKeRZe9CwmFs38O/qNWSLVHxYW9C8K+eUfhHJiF/5yXChf2zwkHZg0OzsDrcHaJceHgjM2haXjtNUqHixMXDk1nODwFr7cXDc9dGhcOTwmfvTWgB0tJ8D9/4BIXptIm9FSLFc+3fLjw+RsLeqQG4v98uQA858kVLhydsKHneeCTh/5YPLhwbNyGDhOBr/2q5eGhn/9dcLm48OUrCzrJ5N3z/1kRcOH4mAkdoyIVXMy48PULAzrDZa5T7aHwZZOJgmc4MQovQNqFHrVr4sKJUZuTI/DSqxFTe42KCydHDKZT8Ednp4S4o3BODcOf2xM6QBYbd5lOJRTOd0+Rm9vNIuPCdMr0cE4PIejSYBURt/w43z9B2I3FKgXO2QGE3lh0enVj2nMzCOd8H8JwL7cndIAspNoTYTg/PEY+HF501gHS1jEqSoezvXOeD+diD6LgUOlVBUiV4VSMUklGhQk1z9VIVVNNDRbV21V7VR0uCs6Pj/AbBPOQwE6+/N8AAAAASUVORK5CYII=";
@@ -46,6 +51,155 @@ function emitState(state: HostData): void {
 
 function emitStatus(status: ConnectionStatus): void {
   mainWindow?.webContents.send("connection:status", status);
+}
+
+function emitUpdateState(state: AppUpdateState): void {
+  mainWindow?.webContents.send("update:state", state);
+  detailWindows.forEach((detailWindow) => detailWindow.webContents.send("update:state", state));
+}
+
+function clearUpdateProgress(phase: AppUpdateState["phase"]): boolean {
+  return phase !== "downloading";
+}
+
+function setUpdateState(nextState: Omit<AppUpdateState, "currentVersion"> & { currentVersion?: string }): AppUpdateState {
+  updateState = {
+    currentVersion: app.getVersion(),
+    ...nextState,
+    percent: clearUpdateProgress(nextState.phase) ? undefined : nextState.percent
+  };
+  emitUpdateState(updateState);
+  return updateState;
+}
+
+function getUpdateVersion(info?: UpdateInfo | null): string | undefined {
+  return info?.version || undefined;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error) {
+    return error;
+  }
+
+  return fallback;
+}
+
+function configureAutoUpdater(): void {
+  if (autoUpdaterConfigured) {
+    return;
+  }
+
+  autoUpdaterConfigured = true;
+  log.initialize();
+  log.transports.file.level = "info";
+  autoUpdater.logger = log;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  if (process.platform === "win32") {
+    const unsignedUpdater = autoUpdater as AppUpdater & {
+      verifyUpdateCodeSignature?: VerifyUpdateCodeSignature;
+    };
+    unsignedUpdater.verifyUpdateCodeSignature = async () => null;
+  }
+
+  autoUpdater.on("checking-for-update", () => {
+    setUpdateState({
+      phase: "checking",
+      message: "正在检查更新..."
+    });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    setUpdateState({
+      phase: "available",
+      latestVersion: getUpdateVersion(info),
+      message: "发现新版本，正在下载..."
+    });
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    setUpdateState({
+      phase: "not-available",
+      latestVersion: getUpdateVersion(info),
+      message: "已是最新版本。"
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+    setUpdateState({
+      phase: "downloading",
+      latestVersion: updateState.latestVersion,
+      percent: Math.max(0, Math.min(100, progress.percent)),
+      message: "正在下载更新..."
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    setUpdateState({
+      phase: "downloaded",
+      latestVersion: getUpdateVersion(info) ?? updateState.latestVersion,
+      message: "更新已下载完成，重启应用后安装。"
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    setUpdateState({
+      phase: "error",
+      latestVersion: updateState.latestVersion,
+      message: getErrorMessage(error, "检查更新失败。")
+    });
+  });
+}
+
+async function checkForAppUpdates(): Promise<AppUpdateState> {
+  configureAutoUpdater();
+
+  if (!app.isPackaged) {
+    return setUpdateState({
+      phase: "error",
+      message: "仅 release 版支持检查更新。"
+    });
+  }
+
+  if (updateState.phase === "checking" || updateState.phase === "downloading" || updateState.phase === "downloaded") {
+    return updateState;
+  }
+
+  try {
+    setUpdateState({
+      phase: "checking",
+      message: "正在检查更新..."
+    });
+    await autoUpdater.checkForUpdates();
+    return updateState;
+  } catch (error) {
+    return setUpdateState({
+      phase: "error",
+      latestVersion: updateState.latestVersion,
+      message: getErrorMessage(error, "检查更新失败。")
+    });
+  }
+}
+
+function installDownloadedUpdate(): void {
+  configureAutoUpdater();
+
+  if (updateState.phase !== "downloaded") {
+    setUpdateState({
+      phase: "error",
+      latestVersion: updateState.latestVersion,
+      message: "更新还没有下载完成。"
+    });
+    return;
+  }
+
+  isQuitting = true;
+  autoUpdater.quitAndInstall(false, true);
 }
 
 function emitHostInfo(info: HostInfo | null): void {
@@ -451,6 +605,14 @@ function registerIpc(): void {
   ipcMain.handle("preferences:patch", (_event, preferences: Partial<AppPreferences>) => preferencesStore.patch(preferences));
 
   ipcMain.handle("network:addresses", () => listLanUrls(DEFAULT_PORT));
+
+  ipcMain.handle("update:get-state", () => updateState);
+
+  ipcMain.handle("update:check", () => checkForAppUpdates());
+
+  ipcMain.handle("update:install", () => {
+    installDownloadedUpdate();
+  });
 
   ipcMain.handle("clipboard:write-text", (_event, text: string) => {
     clipboard.writeText(text);

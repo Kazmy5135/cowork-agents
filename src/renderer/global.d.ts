@@ -1,5 +1,6 @@
 import type {
   AccountAuthResult,
+  AppUpdateState,
   AppPreferences,
   ConnectionStatus,
   HostData,
@@ -16,6 +17,9 @@ declare global {
       getPreferences: () => Promise<AppPreferences>;
       patchPreferences: (preferences: Partial<AppPreferences>) => Promise<AppPreferences>;
       getLanAddresses: () => Promise<string[]>;
+      getUpdateState: () => Promise<AppUpdateState>;
+      checkForUpdates: () => Promise<AppUpdateState>;
+      installUpdate: () => Promise<void>;
       startHost: () => Promise<HostInfo>;
       stopHost: () => Promise<void>;
       joinHost: (address: string) => Promise<string>;
@@ -47,6 +51,7 @@ declare global {
       onState: (callback: (state: HostData) => void) => () => void;
       onConnectionStatus: (callback: (status: ConnectionStatus) => void) => () => void;
       onHostInfo: (callback: (info: HostInfo | null) => void) => () => void;
+      onUpdateState: (callback: (state: AppUpdateState) => void) => () => void;
       onCompactMode: (callback: (compact: boolean) => void) => () => void;
     };
   }
