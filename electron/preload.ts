@@ -14,6 +14,8 @@ import type {
 contextBridge.exposeInMainWorld("coWorkApi", {
   getState: () => ipcRenderer.invoke("state:get") as Promise<HostData>,
   getPreferences: () => ipcRenderer.invoke("preferences:get") as Promise<AppPreferences>,
+  patchPreferences: (preferences: Partial<AppPreferences>) =>
+    ipcRenderer.invoke("preferences:patch", preferences) as Promise<AppPreferences>,
   getLanAddresses: () => ipcRenderer.invoke("network:addresses") as Promise<string[]>,
   getUpdateState: () => ipcRenderer.invoke("update:get-state") as Promise<AppUpdateState>,
   checkForUpdates: () => ipcRenderer.invoke("update:check") as Promise<AppUpdateState>,

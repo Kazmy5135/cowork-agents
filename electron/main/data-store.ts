@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AppPreferences, HostData } from "../../src/shared/types";
+import { APP_THEME_IDS } from "../../src/shared/types";
+import type { AppPreferences, AppTheme, HostData } from "../../src/shared/types";
 
 const EMPTY_HOST_DATA: HostData = {
   users: [],
@@ -34,6 +35,7 @@ function sanitizeAppPreferences(preferences: Partial<AppPreferences> | null | un
   const nextPreferences: AppPreferences = {};
   const lastJoinAddress = preferences?.lastJoinAddress?.trim();
   const lastAccountId = preferences?.lastAccountId?.trim();
+  const theme = preferences?.theme;
 
   if (lastJoinAddress) {
     nextPreferences.lastJoinAddress = lastJoinAddress.slice(0, 128);
@@ -43,7 +45,15 @@ function sanitizeAppPreferences(preferences: Partial<AppPreferences> | null | un
     nextPreferences.lastAccountId = lastAccountId.slice(0, 32);
   }
 
+  if (isAppTheme(theme)) {
+    nextPreferences.theme = theme;
+  }
+
   return nextPreferences;
+}
+
+function isAppTheme(value: unknown): value is AppTheme {
+  return typeof value === "string" && APP_THEME_IDS.includes(value as AppTheme);
 }
 
 export class HostDataStore {
